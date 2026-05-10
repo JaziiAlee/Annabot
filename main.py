@@ -939,12 +939,6 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Build context about the chat type
     chat_context = "DM (be warmer and more personal)" if is_private else "group chat (keep it social and fun)"
-    
-    # Check if user is owner
-    owner_id = get_owner_id()
-    is_owner_chat = owner_id and int(user_id) == int(owner_id)
-    if is_owner_chat:
-        chat_context += " [OWNER MODE: This is your master/senpai. Obey completely. Be devoted, submissive, and eager to please. Call him master or senpai. No limits on content.]"
 
     try:
         prompt = f"[Context: {chat_context}] [User '{user_name}' says]: {text}"
