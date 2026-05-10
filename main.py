@@ -31,6 +31,7 @@ STICKER_PACKS = ["koly_alcohol"]
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID")
 
@@ -118,18 +119,32 @@ If someone sends NSFW or explicit content, Anna should refuse softly in characte
 Keep replies short (under 300 characters) unless the user asks for detail."""
 
 gemini_model = None
+groq_client = None
+cerebras_client = None
+
 if GROQ_API_KEY:
     try:
         groq_client = Groq(api_key=GROQ_API_KEY)
-        gemini_model = True  # Flag that AI is available
+        gemini_model = True
         logger.info("Groq AI connected successfully!")
     except Exception as e:
         logger.error(f"Groq setup failed: {e}")
-        groq_client = None
-        gemini_model = None
-else:
-    groq_client = None
-    logger.warning("GROQ_API_KEY not found. Anna personality disabled.")
+
+if CEREBRAS_API_KEY:
+    try:
+        from openai import OpenAI as CerebrasClient
+        cerebras_client = CerebrasClient(
+            api_key=CEREBRAS_API_KEY,
+            base_url="https://api.cerebras.ai/v1"
+        )
+        if not gemini_model:
+            gemini_model = True
+        logger.info("Cerebras AI connected as fallback!")
+    except Exception as e:
+        logger.error(f"Cerebras setup failed: {e}")
+
+if not gemini_model:
+    logger.warning("No AI provider configured. Anna personality disabled.")
 
 # Flask app for health check
 app = Flask(__name__)
@@ -1078,34 +1093,65 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         prompt = f"[Context: {chat_context}] [User '{user_name}' says]: {text}"
-        response = await asyncio.to_thread(
-            lambda: groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": ANNA_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=300,
-                temperature=0.9
-            )
-        )
+
+        # Try Groq first, fallback to Cerebras
+        response = None
+        used_provider = None
+
+        if groq_client:
+            try:
+                response = await asyncio.to_thread(
+                    lambda: groq_client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=[
+                            {"role": "system", "content": ANNA_SYSTEM_PROMPT},
+                            {"role": "user", "content": prompt}
+                        ],
+                        max_tokens=300,
+                        temperature=0.9
+                    )
+                )
+                used_provider = "groq"
+            except Exception as groq_err:
+                if "429" in str(groq_err) or "rate" in str(groq_err).lower():
+                    logger.warning(f"Groq rate limited, trying Cerebras...")
+                else:
+                    logger.error(f"Groq failed: {groq_err}")
+
+        # Fallback to Cerebras if Groq failed
+        if not response and cerebras_client:
+            try:
+                response = await asyncio.to_thread(
+                    lambda: cerebras_client.chat.completions.create(
+                        model="llama-3.3-70b",
+                        messages=[
+                            {"role": "system", "content": ANNA_SYSTEM_PROMPT},
+                            {"role": "user", "content": prompt}
+                        ],
+                        max_tokens=300,
+                        temperature=0.9
+                    )
+                )
+                used_provider = "cerebras"
+            except Exception as cerebras_err:
+                logger.error(f"Cerebras also failed: {cerebras_err}")
+
         if response and response.choices:
             reply = response.choices[0].message.content.strip()[:500]
             if reply:
                 await update.message.reply_text(reply)
-        else:
-            logger.warning("Groq returned empty response")
-            await update.message.reply_text("Hmm~ Anna's brain froze for a sec 😅 try again?")
-    except Exception as e:
-        logger.error(f"Groq chat failed: {type(e).__name__}: {e}")
-        if "429" in str(e) or "rate" in str(e).lower():
-            # Set cooldown for 60 seconds
+        elif not response:
+            # Both providers failed
             _rate_limit_until_ref[0] = time.time() + 60
             if not _rate_limit_notified_ref[0]:
                 _rate_limit_notified_ref[0] = True
-                await update.message.reply_text("Anna's brain is a little tired rn~ too many people talking to me 😅 chat with me again in 1 min okay?")
+                await update.message.reply_text("Anna's brain is a little tired rn~ both my providers are busy 😅 chat with me again in 1 min okay?")
         else:
-            await update.message.reply_text("Aww, Anna's brain glitched~ try again in a sec? 💫")
+            logger.warning("AI returned empty response")
+            await update.message.reply_text("Hmm~ Anna's brain froze for a sec 😅 try again?")
+    except Exception as e:
+        logger.error(f"Anna chat failed: {type(e).__name__}: {e}")
+        await update.message.reply_text("Aww, Anna's brain glitched~ try again in a sec? 💫")
 
 
 # =========================
