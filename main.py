@@ -946,6 +946,8 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text.startswith("/"):
         return
 
+    logger.info(f"Anna chat triggered: private={is_private}, mentioned={is_mentioned}, reply={is_reply_to_bot}, active={is_active_convo}")
+
     # Mark conversation as active
     mark_conversation_active(chat_id, user_id)
 
@@ -963,8 +965,12 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if response:
             response = response.strip()[:500]
             await update.message.reply_text(response)
+        else:
+            logger.warning("Gemini returned empty response")
+            await update.message.reply_text("Hmm~ Anna's brain froze for a sec 😅 try again?")
     except Exception as e:
-        logger.error(f"Gemini chat failed: {e}")
+        logger.error(f"Gemini chat failed: {type(e).__name__}: {e}")
+        await update.message.reply_text("Aww, Anna's brain glitched~ try again in a sec? 💫")
 
 
 # =========================
