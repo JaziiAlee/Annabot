@@ -16,6 +16,7 @@ from telegram import Update, InlineQueryResultArticle, InputTextMessageContent, 
 from telegram.ext import Application, CommandHandler, InlineQueryHandler, MessageHandler, filters, ContextTypes
 from groq import Groq
 import requests
+from duckduckgo_search import DDGS
 
 load_dotenv()
 
@@ -920,35 +921,30 @@ async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Mou~ this command is only for my owner 💙")
         return
 
-    if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
-        await update.message.reply_text("Image search isn't configured yet~ 😢")
-        return
-
     query = " ".join(context.args) if context.args else None
     if not query:
         await update.message.reply_text("Tell me what to search~ like /image cute anime girl ✨")
         return
 
     try:
-        url = "https://www.googleapis.com/customsearch/v1"
-        params = {
-            "key": GOOGLE_API_KEY,
-            "cx": GOOGLE_CSE_ID,
-            "q": query,
-            "searchType": "image",
-            "num": 5,
-            "safe": "off"
-        }
-        response = await asyncio.to_thread(lambda: requests.get(url, params=params))
-        data = response.json()
+        def search_images():
+            with DDGS() as ddgs:
+                results = ddgs.images(query, max_results=10)
+                return list(results)
 
-        if "items" not in data or len(data["items"]) == 0:
+        results = await asyncio.to_thread(search_images)
+
+        if not results:
             await update.message.reply_text(f"Couldn't find images for '{query}'~ gomen 😢")
             return
 
-        # Pick a random image from top 5 results
-        item = random.choice(data["items"])
-        image_url = item["link"]
+        # Pick a random image from top results
+        item = random.choice(results)
+        image_url = item.get("image") or item.get("url") or item.get("thumbnail")
+
+        if not image_url:
+            await update.message.reply_text(f"Couldn't find images for '{query}'~ gomen 😢")
+            return
 
         cute_captions = [
             f"Here you go, senpai~ ✨ ({query})",
@@ -978,41 +974,37 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Mou~ this command is only for my owner 💙")
         return
 
-    if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
-        await update.message.reply_text("Video search isn't configured yet~ 😢")
-        return
-
     query = " ".join(context.args) if context.args else None
     if not query:
         await update.message.reply_text("Tell me what to search~ like /video funny cat compilation ✨")
         return
 
     try:
-        url = "https://www.googleapis.com/customsearch/v1"
-        params = {
-            "key": GOOGLE_API_KEY,
-            "cx": GOOGLE_CSE_ID,
-            "q": query + " video",
-            "num": 5,
-            "safe": "off"
-        }
-        response = await asyncio.to_thread(lambda: requests.get(url, params=params))
-        data = response.json()
+        def search_videos():
+            with DDGS() as ddgs:
+                results = ddgs.videos(query, max_results=10)
+                return list(results)
 
-        if "items" not in data or len(data["items"]) == 0:
+        results = await asyncio.to_thread(search_videos)
+
+        if not results:
             await update.message.reply_text(f"Couldn't find videos for '{query}'~ gomen 😢")
             return
 
-        # Pick first video result that has a link
-        item = random.choice(data["items"])
-        video_url = item["link"]
+        # Pick a random result
+        item = random.choice(results)
+        video_url = item.get("content") or item.get("embed_url") or item.get("url")
         title = item.get("title", query)
 
+        if not video_url:
+            await update.message.reply_text(f"Couldn't find videos for '{query}'~ gomen 😢")
+            return
+
         cute_captions = [
-            f"Found a video for you, senpai~ ✨",
-            f"Here~ watch this 💫",
-            f"Uwaa, this looks good~ 🌸",
-            f"Anna found it~ 💙",
+            "Found a video for you, senpai~ ✨",
+            "Here~ watch this 💫",
+            "Uwaa, this looks good~ 🌸",
+            "Anna found it~ 💙",
         ]
         caption = random.choice(cute_captions)
 
