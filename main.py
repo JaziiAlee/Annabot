@@ -907,6 +907,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
     if not gemini_model:
+        logger.warning("Anna chat skipped: AI not available")
         return
 
     # Track user
@@ -1017,8 +1018,8 @@ def run_bot():
             # Inline query handler
             application.add_handler(InlineQueryHandler(inline_translate))
 
-            # Anna personality chat handler (triggers on mention, reply, or random)
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anna_chat), group=0)
+            # Anna personality chat handler (triggers on mention, reply, or active convo)
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anna_chat), group=2)
 
             # Auto-translate handler (also handles user tracking)
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_translate_message), group=1)
