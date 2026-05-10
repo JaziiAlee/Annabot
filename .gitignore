@@ -16,3 +16,4 @@ ENV/
 .anna_session
 *.session
 *.session-journal
+PROJECT_STATUS.md
