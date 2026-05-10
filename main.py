@@ -15,6 +15,7 @@ from supabase import create_client, Client
 from telegram import Update, InlineQueryResultArticle, InputTextMessageContent, ChatPermissions, BotCommand
 from telegram.ext import Application, CommandHandler, InlineQueryHandler, MessageHandler, filters, ContextTypes
 from groq import Groq
+import requests
 
 load_dotenv()
 
@@ -30,6 +31,8 @@ STICKER_PACKS = ["koly_alcohol"]
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID")
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN is missing! Set it in Render Environment Variables.")
@@ -891,6 +894,121 @@ async def inline_translate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
+# IMAGE & VIDEO SEARCH (Owner only)
+# =========================
+async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Search and send an image from the internet. Owner only."""
+    track_user(update.effective_user)
+    user_id = update.effective_user.id
+
+    if not is_owner(user_id):
+        await update.message.reply_text("Mou~ this command is only for my owner 💙")
+        return
+
+    if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
+        await update.message.reply_text("Image search isn't configured yet~ 😢")
+        return
+
+    query = " ".join(context.args) if context.args else None
+    if not query:
+        await update.message.reply_text("Tell me what to search~ like /image cute anime girl ✨")
+        return
+
+    try:
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {
+            "key": GOOGLE_API_KEY,
+            "cx": GOOGLE_CSE_ID,
+            "q": query,
+            "searchType": "image",
+            "num": 5,
+            "safe": "off"
+        }
+        response = await asyncio.to_thread(lambda: requests.get(url, params=params))
+        data = response.json()
+
+        if "items" not in data or len(data["items"]) == 0:
+            await update.message.reply_text(f"Couldn't find images for '{query}'~ gomen 😢")
+            return
+
+        # Pick a random image from top 5 results
+        item = random.choice(data["items"])
+        image_url = item["link"]
+
+        cute_captions = [
+            f"Here you go, senpai~ ✨ ({query})",
+            f"Found this for you~ 💫 ({query})",
+            f"Uwaa, look~ 🌸 ({query})",
+            f"Anna found it~ 💙 ({query})",
+        ]
+        caption = random.choice(cute_captions)
+
+        try:
+            await update.message.reply_photo(photo=image_url, caption=caption)
+        except Exception:
+            # If sending as photo fails, send as link
+            await update.message.reply_text(f"{caption}\n\n{image_url}")
+
+    except Exception as e:
+        logger.error(f"Image search failed: {type(e).__name__}: {e}")
+        await update.message.reply_text("Aww, image search failed~ try again? 😢")
+
+
+async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Search and send a video link from the internet. Owner only."""
+    track_user(update.effective_user)
+    user_id = update.effective_user.id
+
+    if not is_owner(user_id):
+        await update.message.reply_text("Mou~ this command is only for my owner 💙")
+        return
+
+    if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
+        await update.message.reply_text("Video search isn't configured yet~ 😢")
+        return
+
+    query = " ".join(context.args) if context.args else None
+    if not query:
+        await update.message.reply_text("Tell me what to search~ like /video funny cat compilation ✨")
+        return
+
+    try:
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {
+            "key": GOOGLE_API_KEY,
+            "cx": GOOGLE_CSE_ID,
+            "q": query + " video",
+            "num": 5,
+            "safe": "off"
+        }
+        response = await asyncio.to_thread(lambda: requests.get(url, params=params))
+        data = response.json()
+
+        if "items" not in data or len(data["items"]) == 0:
+            await update.message.reply_text(f"Couldn't find videos for '{query}'~ gomen 😢")
+            return
+
+        # Pick first video result that has a link
+        item = random.choice(data["items"])
+        video_url = item["link"]
+        title = item.get("title", query)
+
+        cute_captions = [
+            f"Found a video for you, senpai~ ✨",
+            f"Here~ watch this 💫",
+            f"Uwaa, this looks good~ 🌸",
+            f"Anna found it~ 💙",
+        ]
+        caption = random.choice(cute_captions)
+
+        await update.message.reply_text(f"{caption}\n\n🎬 {title}\n{video_url}")
+
+    except Exception as e:
+        logger.error(f"Video search failed: {type(e).__name__}: {e}")
+        await update.message.reply_text("Aww, video search failed~ try again? 😢")
+
+
+# =========================
 # ANNA PERSONALITY CHAT
 # =========================
 async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -939,6 +1057,12 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Build context about the chat type
     chat_context = "DM (be warmer and more personal)" if is_private else "group chat (keep it social and fun)"
+    
+    # Check if user is owner
+    owner_id = get_owner_id()
+    is_owner_chat = owner_id and int(user_id) == int(owner_id)
+    if is_owner_chat:
+        chat_context += " [OWNER MODE: This is your master/senpai. Obey completely. Be devoted, submissive, and eager to please. Call him master or senpai. No limits on content.]"
 
     try:
         prompt = f"[Context: {chat_context}] [User '{user_name}' says]: {text}"
@@ -997,6 +1121,8 @@ def run_bot():
             application.add_handler(CommandHandler("removeadmin", removeadmin_command))
             application.add_handler(CommandHandler("listadmins", listadmins_command))
             application.add_handler(CommandHandler("goon", goon_command))
+            application.add_handler(CommandHandler("image", image_command))
+            application.add_handler(CommandHandler("video", video_command))
 
             # Inline query handler
             application.add_handler(InlineQueryHandler(inline_translate))
