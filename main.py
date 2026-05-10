@@ -1086,8 +1086,13 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Hmm~ Anna's brain froze for a sec 😅 try again?")
     except Exception as e:
         logger.error(f"Groq chat failed: {type(e).__name__}: {e}")
+        # Only send rate limit message once per 60 seconds per chat
+        cooldown_key = f"rate_limit_{chat_id}"
+        last_warned = context.bot_data.get(cooldown_key, 0)
         if "429" in str(e) or "rate" in str(e).lower():
-            await update.message.reply_text("Anna's brain is a little tired rn~ too many people talking to me 😅 try again in a min?")
+            if time.time() - last_warned > 60:
+                context.bot_data[cooldown_key] = time.time()
+                await update.message.reply_text("Anna's brain is a little tired rn~ too many people talking to me 😅 try again in a min?")
         else:
             await update.message.reply_text("Aww, Anna's brain glitched~ try again in a sec? 💫")
 
