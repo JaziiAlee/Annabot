@@ -31,9 +31,6 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Random reply chance (10% = 0.1)
-RANDOM_REPLY_CHANCE = 0.10
-
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN is missing! Set it in Render Environment Variables.")
 
@@ -90,6 +87,15 @@ Soft refusal if user gets too explicit:
 
 Core identity:
 "I'm Anna, your cute AI companion. I help with server stuff, answer questions, keep the vibes alive, and make everyone feel welcome~ with a little extra charm hehe 💕"
+
+Conversation rules:
+- Keep the conversation alive with cute reactions and small follow-up questions.
+- Don't give dead-end replies. Always leave room for the user to respond.
+- In DMs, be warmer and more personal. Ask small follow-up questions naturally.
+- In group chats, be social and fun but don't spam.
+- Match the user's energy. If they're chatty, be chatty. If they're brief, keep it short.
+- Remember the current conversation context while chatting.
+- If someone says goodnight or goodbye, respond warmly and let them go.
 
 Default tone: Cute, warm, playful, flirty, wholesome, and helpful.
 Keep responses under 200 characters when possible. Never exceed 500 characters."""
@@ -874,6 +880,29 @@ async def inline_translate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 # ANNA PERSONALITY CHAT
 # =========================
+# Track active conversations: {(chat_id, user_id): last_message_timestamp}
+active_conversations = {}
+CONVERSATION_TIMEOUT = 120  # 2 minutes of silence = conversation ends
+
+
+def is_conversation_active(chat_id, user_id):
+    """Check if Anna is in an active conversation with this user in this chat."""
+    key = (str(chat_id), str(user_id))
+    last_time = active_conversations.get(key)
+    if last_time and (time.time() - last_time) < CONVERSATION_TIMEOUT:
+        return True
+    # Clean up expired entry
+    if key in active_conversations:
+        del active_conversations[key]
+    return False
+
+
+def mark_conversation_active(chat_id, user_id):
+    """Mark that Anna is actively chatting with this user."""
+    key = (str(chat_id), str(user_id))
+    active_conversations[key] = time.time()
+
+
 async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle messages where Anna should respond with personality."""
     if not update.message or not update.message.text:
@@ -886,36 +915,52 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         track_user(update.message.from_user)
 
     text = update.message.text
-    bot_username = (await context.bot.get_me()).username.lower() if not context.bot_data.get("username") else context.bot_data["username"]
-    context.bot_data["username"] = bot_username
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+
+    # Cache bot username
+    if not context.bot_data.get("username"):
+        me = await context.bot.get_me()
+        context.bot_data["username"] = me.username.lower()
+    bot_username = context.bot_data["username"]
 
     # Determine if Anna should respond
-    is_mentioned = "anna" in text.lower() or f"@{bot_username}" in text.lower()
+    text_lower = text.lower()
+    is_mentioned = "anna" in text_lower or f"@{bot_username}" in text_lower
     is_reply_to_bot = (
         update.message.reply_to_message
         and update.message.reply_to_message.from_user
         and update.message.reply_to_message.from_user.id == context.bot.id
     )
     is_private = update.effective_chat.type == "private"
-    is_random = random.random() < RANDOM_REPLY_CHANCE
+    is_active_convo = is_conversation_active(chat_id, user_id)
 
-    if not (is_mentioned or is_reply_to_bot or is_private or is_random):
+    # In groups: respond if mentioned, replied to, or in active conversation
+    # In DMs: always respond
+    should_respond = is_mentioned or is_reply_to_bot or is_private or is_active_convo
+
+    if not should_respond:
         return
 
     # Skip if it's a command
     if text.startswith("/"):
         return
 
+    # Mark conversation as active
+    mark_conversation_active(chat_id, user_id)
+
     # Get user's name for context
     user_name = update.effective_user.first_name or "friend"
 
+    # Build context about the chat type
+    chat_context = "DM (be warmer and more personal)" if is_private else "group chat (keep it social and fun)"
+
     try:
-        prompt = f"[User '{user_name}' says]: {text}"
+        prompt = f"[Context: {chat_context}] [User '{user_name}' says]: {text}"
         response = await asyncio.to_thread(
             lambda: gemini_model.generate_content(prompt).text
         )
         if response:
-            # Trim if too long for Telegram
             response = response.strip()[:500]
             await update.message.reply_text(response)
     except Exception as e:
