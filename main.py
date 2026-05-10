@@ -1011,26 +1011,24 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 # ANNA PERSONALITY CHAT
 # =========================
-# Rate limit tracking
-_rate_limit_until = 0  # timestamp when rate limit resets
-_rate_limit_notified = False  # whether we already told the user
+# Rate limit tracking (using lists as mutable refs to avoid global keyword)
+_rate_limit_until_ref = [0]  # timestamp when rate limit resets
+_rate_limit_notified_ref = [False]  # whether we already told the user
 
 
 async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle messages where Anna should respond with personality."""
-    global _rate_limit_until, _rate_limit_notified
-
     if not update.message or not update.message.text:
         return
     if not gemini_model:
         return
 
     # If rate limited, silently ignore until reset
-    if time.time() < _rate_limit_until:
+    if time.time() < _rate_limit_until_ref[0]:
         return
 
     # Reset notification flag once limit is over
-    _rate_limit_notified = False
+    _rate_limit_notified_ref[0] = False
 
     # Track user
     if update.message.from_user:
@@ -1099,13 +1097,12 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning("Groq returned empty response")
             await update.message.reply_text("Hmm~ Anna's brain froze for a sec 😅 try again?")
     except Exception as e:
-        global _rate_limit_until, _rate_limit_notified
         logger.error(f"Groq chat failed: {type(e).__name__}: {e}")
         if "429" in str(e) or "rate" in str(e).lower():
             # Set cooldown for 60 seconds
-            _rate_limit_until = time.time() + 60
-            if not _rate_limit_notified:
-                _rate_limit_notified = True
+            _rate_limit_until_ref[0] = time.time() + 60
+            if not _rate_limit_notified_ref[0]:
+                _rate_limit_notified_ref[0] = True
                 await update.message.reply_text("Anna's brain is a little tired rn~ too many people talking to me 😅 chat with me again in 1 min okay?")
         else:
             await update.message.reply_text("Aww, Anna's brain glitched~ try again in a sec? 💫")
