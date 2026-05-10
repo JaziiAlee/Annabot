@@ -928,7 +928,7 @@ async def inline_translate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # IMAGE & VIDEO SEARCH (Owner only)
 # =========================
 async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Search and send an image from the internet. Owner only."""
+    """Generate an image from text using Pollinations.ai. Owner only."""
     track_user(update.effective_user)
     user_id = update.effective_user.id
 
@@ -936,50 +936,29 @@ async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Mou~ this command is only for my owner 💙")
         return
 
-    if not DDGS_AVAILABLE:
-        await update.message.reply_text("Image search is temporarily unavailable~ gomen 😢")
-        return
-
     query = " ".join(context.args) if context.args else None
     if not query:
-        await update.message.reply_text("Tell me what to search~ like /image cute anime girl ✨")
+        await update.message.reply_text("Tell me what to generate~ like /image cute anime girl ✨")
         return
 
     try:
-        def search_images():
-            with DDGS() as ddgs:
-                results = ddgs.images(query, max_results=10)
-                return list(results)
-
-        results = await asyncio.to_thread(search_images)
-
-        if not results:
-            await update.message.reply_text(f"Couldn't find images for '{query}'~ gomen 😢")
-            return
-
-        item = random.choice(results)
-        image_url = item.get("image") or item.get("url") or item.get("thumbnail")
-
-        if not image_url:
-            await update.message.reply_text(f"Couldn't find images for '{query}'~ gomen 😢")
-            return
+        # Pollinations.ai - free image generation, no API key needed
+        encoded_query = query.replace(" ", "%20")
+        image_url = f"https://image.pollinations.ai/prompt/{encoded_query}?width=1024&height=1024&nologo=true&seed={random.randint(1, 999999)}"
 
         cute_captions = [
             f"Here you go, senpai~ ✨ ({query})",
-            f"Found this for you~ 💫 ({query})",
-            f"Uwaa, look~ 🌸 ({query})",
-            f"Anna found it~ 💙 ({query})",
+            f"Anna made this for you~ 💫 ({query})",
+            f"Uwaa, look what I generated~ 🌸 ({query})",
+            f"Created with love~ 💙 ({query})",
         ]
         caption = random.choice(cute_captions)
 
-        try:
-            await update.message.reply_photo(photo=image_url, caption=caption)
-        except Exception:
-            await update.message.reply_text(f"{caption}\n\n{image_url}")
+        await update.message.reply_photo(photo=image_url, caption=caption)
 
     except Exception as e:
-        logger.error(f"Image search failed: {type(e).__name__}: {e}")
-        await update.message.reply_text("Aww, image search failed~ try again? 😢")
+        logger.error(f"Image generation failed: {type(e).__name__}: {e}")
+        await update.message.reply_text("Aww, image generation failed~ try again? 😢")
 
 
 async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
