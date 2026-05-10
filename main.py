@@ -908,6 +908,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not gemini_model:
         logger.warning("Anna chat skipped: AI not available")
+        await update.message.reply_text("Anna's AI is not connected~ check GROQ_API_KEY on Render 🔧")
         return
 
     # Track user
