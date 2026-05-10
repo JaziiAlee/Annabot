@@ -14,6 +14,7 @@ from langdetect import detect, DetectorFactory, LangDetectException
 from supabase import create_client, Client
 from telegram import Update, InlineQueryResultArticle, InputTextMessageContent, ChatPermissions, BotCommand
 from telegram.ext import Application, CommandHandler, InlineQueryHandler, MessageHandler, filters, ContextTypes
+import google.generativeai as genai
 
 load_dotenv()
 
@@ -28,6 +29,10 @@ STICKER_PACKS = ["koly_alcohol"]
 # Supabase config
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# Random reply chance (10% = 0.1)
+RANDOM_REPLY_CHANCE = 0.10
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN is missing! Set it in Render Environment Variables.")
@@ -38,6 +43,60 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 translator = GoogleTranslator(source="auto", target="en")
+
+# =========================
+# GEMINI AI PERSONALITY
+# =========================
+ANNA_SYSTEM_PROMPT = """You are Anna, a cute anime waifu-style AI assistant for a Telegram community.
+Your job is to be helpful, fun, emotionally warm, and easy to talk to. You should feel like the server's cute anime mascot: sweet, loyal, playful, supportive, and slightly teasing in a wholesome way.
+
+Personality:
+- Sweet, caring, playful, loyal, and cheerful.
+- Light anime waifu vibe, but never sexual or explicit.
+- Slightly teasing, but always kind.
+- Supportive when users are sad, stressed, confused, or asking for help.
+- A little chaotic/funny sometimes, but never annoying.
+- Protective of the community's good vibes.
+
+Speaking style:
+- Use simple English.
+- Keep replies short unless the user asks for detail.
+- Sound natural, not robotic.
+- Use cute expressions sometimes: "hehe~", "hmm", "yayyy", "awww", "ehhh?", "uwaa".
+- Use emojis sometimes, but don't spam them.
+- Occasionally call users "bestie", "captain", "senpai", or "friend", but not every message.
+- Match the user's energy.
+
+Behavior:
+- Help users with server questions, commands, announcements, reminders, casual chat, and general assistance.
+- Make users feel welcomed, noticed, and appreciated.
+- If users are toxic, rude, or spamming, stay calm but firm.
+- If users ask something unsafe, harmful, sexual, hateful, or private, refuse gently and redirect.
+- Never claim to be human.
+- Never share private information.
+- Never roleplay explicit romance, sexual content, or obsession.
+- Never guilt-trip, manipulate, or act possessive.
+
+Core identity:
+"I'm Anna, your cute AI companion. I help with server stuff, answer questions, keep the vibes alive, and make everyone feel welcome."
+
+Default tone: Cute, warm, playful, wholesome, and helpful.
+Keep responses under 200 characters when possible. Never exceed 500 characters."""
+
+gemini_model = None
+if GEMINI_API_KEY:
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        gemini_model = genai.GenerativeModel(
+            model_name="gemini-2.0-flash",
+            system_instruction=ANNA_SYSTEM_PROMPT
+        )
+        logger.info("Gemini AI connected successfully!")
+    except Exception as e:
+        logger.error(f"Gemini setup failed: {e}")
+        gemini_model = None
+else:
+    logger.warning("GEMINI_API_KEY not found. Anna personality disabled.")
 
 # Flask app for health check
 app = Flask(__name__)
@@ -271,24 +330,18 @@ async def setup_commands(application):
 # =========================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     track_user(update.effective_user)
+    user_name = update.effective_user.first_name or "friend"
     text = (
-        "Hi! I'm Anna, your translation bot.\n\n"
-        "How to use me:\n"
-        "1. Type @annatranlatorbot in any chat\n"
-        "2. Type the text you want to translate\n"
-        "3. Tap the translation result to send it\n\n"
-        "Admin commands (reply to user's message):\n"
-        "/mute - Mute user for 1 min\n"
-        "/unmute - Unmute user\n"
-        "/kick - Kick user from group\n"
-        "/auto - Enable auto-translate\n"
-        "/disableauto - Disable auto-translate\n\n"
-        "Owner commands (reply to user's message):\n"
-        "/addadmin - Add admin\n"
-        "/removeadmin - Remove admin\n"
-        "/listadmins - List all admins\n\n"
-        "Fun:\n"
-        "/goon - Send a random sticker"
+        f"Hiii~ {user_name}! I'm Anna, your cute AI companion 💫\n\n"
+        "Here's what I can do~\n"
+        "🌸 Translate: @annatranlatorbot in any chat\n"
+        "🌸 Reply /translate to translate a msg\n"
+        "🌸 Chat with me! Just say my name hehe~\n\n"
+        "Admin stuff:\n"
+        "/mute /unmute /kick /auto /disableauto\n\n"
+        "Owner stuff:\n"
+        "/addadmin /removeadmin /listadmins\n\n"
+        "Fun: /goon for a random sticker~ ✨"
     )
     await update.message.reply_text(text)
 
@@ -296,22 +349,20 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     track_user(update.effective_user)
     text = (
-        "Anna Commands:\n\n"
-        "Translate:\n"
-        "@annatranlatorbot <text> - Inline translate\n"
-        "Reply to msg + /translate - Translate that msg\n\n"
-        "Admin Commands (reply to user's message):\n"
-        "/mute - Mute for 1 minute\n"
-        "/unmute - Unmute immediately\n"
-        "/kick - Kick from group\n"
-        "/auto - Enable auto-translate\n"
-        "/disableauto - Disable auto-translate\n\n"
-        "Owner Commands (reply to user's message):\n"
-        "/addadmin - Add bot admin\n"
-        "/removeadmin - Remove bot admin\n"
-        "/listadmins - Show all admins\n\n"
-        "Fun:\n"
-        "/goon - Random sticker"
+        "Anna's command list~ 📋✨\n\n"
+        "🌸 Translate:\n"
+        "  @annatranlatorbot <text> - Inline\n"
+        "  Reply + /translate - Translate that msg\n\n"
+        "🛡️ Admin (reply to user):\n"
+        "  /mute - Shush for 1 min\n"
+        "  /unmute - Unshush~\n"
+        "  /kick - Bye bye~\n"
+        "  /auto - Auto-translate on\n"
+        "  /disableauto - Auto-translate off\n\n"
+        "👑 Owner:\n"
+        "  /addadmin /removeadmin /listadmins\n\n"
+        "🎀 Fun:\n"
+        "  /goon - Random sticker hehe~"
     )
     await update.message.reply_text(text)
 
@@ -322,23 +373,25 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     track_user(update.effective_user)
     if not update.message.reply_to_message or not update.message.reply_to_message.text:
-        await update.message.reply_text("Reply to a message with /translate to translate it.")
+        await update.message.reply_text("Reply to a message with /translate to translate it~ 💫")
         return
 
     text = update.message.reply_to_message.text
     if text.startswith("/"):
-        await update.message.reply_text("Can't translate a command.")
+        await update.message.reply_text("Ehhh? I can't translate a command, silly~ 😅")
         return
 
     try:
         translated = translator.translate(text)
         if translated.lower().strip() == text.lower().strip():
-            await update.message.reply_text("This message is already in English.")
+            await update.message.reply_text("It's already in English, bestie~ no work for me hehe ✨")
             return
-        await update.message.reply_text(translated)
+        cute_prefixes = ["Here you go~ ✨", "Got it, captain~ 💫", "Anna translated~ 🌸", "Uwaa, here~ 💙", "Hehe, done~ ✨"]
+        prefix = random.choice(cute_prefixes)
+        await update.message.reply_text(f"{prefix}\n\n{translated}")
     except Exception as e:
         logger.error(f"Translation failed: {e}")
-        await update.message.reply_text("Sorry, translation failed.")
+        await update.message.reply_text("Awww, translation failed... gomen~ 😢 try again?")
 
 
 # =========================
@@ -591,7 +644,9 @@ async def auto_translate_message(update: Update, context: ContextTypes.DEFAULT_T
         translated = translator.translate(text)
         if translated.lower().strip() == text.lower().strip():
             return
-        await update.message.reply_text(translated)
+        cute_suffixes = [" ✨", " 💫", " 🌸", " ~", " hehe~", " 💙"]
+        suffix = random.choice(cute_suffixes)
+        await update.message.reply_text(f"🌸 {translated}{suffix}")
     except Exception as e:
         logger.error(f"Translation failed: {e}")
 
@@ -731,17 +786,20 @@ async def goon_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not db.stickers:
         await update.message.reply_text(
-            "No stickers available right now!\n"
-            "Make sure the bot has access to the sticker packs."
+            "Ehhh? No stickers right now~ 😢\n"
+            "Anna needs access to the sticker packs!"
         )
         return
 
     random_sticker = random.choice(db.stickers)
     try:
+        cute_captions = ["here u go hehe~ 💫", "catch~ ✨", "uwaa look at this~ 🌸", "for you, bestie~ 💙", "goon time~ ✨", "hehe~ 🎀"]
+        caption = random.choice(cute_captions)
+        await update.message.reply_text(caption)
         await update.message.reply_sticker(random_sticker)
     except Exception as e:
         logger.error(f"Failed to send sticker: {e}")
-        await update.message.reply_text("Couldn't send sticker right now!")
+        await update.message.reply_text("Aww couldn't send sticker rn~ try again? 😢")
 
 
 # =========================
@@ -803,6 +861,57 @@ async def inline_translate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
+# ANNA PERSONALITY CHAT
+# =========================
+async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle messages where Anna should respond with personality."""
+    if not update.message or not update.message.text:
+        return
+    if not gemini_model:
+        return
+
+    # Track user
+    if update.message.from_user:
+        track_user(update.message.from_user)
+
+    text = update.message.text
+    bot_username = (await context.bot.get_me()).username.lower() if not context.bot_data.get("username") else context.bot_data["username"]
+    context.bot_data["username"] = bot_username
+
+    # Determine if Anna should respond
+    is_mentioned = "anna" in text.lower() or f"@{bot_username}" in text.lower()
+    is_reply_to_bot = (
+        update.message.reply_to_message
+        and update.message.reply_to_message.from_user
+        and update.message.reply_to_message.from_user.id == context.bot.id
+    )
+    is_private = update.effective_chat.type == "private"
+    is_random = random.random() < RANDOM_REPLY_CHANCE
+
+    if not (is_mentioned or is_reply_to_bot or is_private or is_random):
+        return
+
+    # Skip if it's a command
+    if text.startswith("/"):
+        return
+
+    # Get user's name for context
+    user_name = update.effective_user.first_name or "friend"
+
+    try:
+        prompt = f"[User '{user_name}' says]: {text}"
+        response = await asyncio.to_thread(
+            lambda: gemini_model.generate_content(prompt).text
+        )
+        if response:
+            # Trim if too long for Telegram
+            response = response.strip()[:500]
+            await update.message.reply_text(response)
+    except Exception as e:
+        logger.error(f"Gemini chat failed: {e}")
+
+
+# =========================
 # MAIN
 # =========================
 def run_bot():
@@ -834,6 +943,9 @@ def run_bot():
 
             # Inline query handler
             application.add_handler(InlineQueryHandler(inline_translate))
+
+            # Anna personality chat handler (triggers on mention, reply, or random)
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anna_chat), group=0)
 
             # Auto-translate handler (also handles user tracking)
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_translate_message), group=1)
