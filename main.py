@@ -970,7 +970,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Hmm~ Anna's brain froze for a sec 😅 try again?")
     except Exception as e:
         logger.error(f"Gemini chat failed: {type(e).__name__}: {e}")
-        await update.message.reply_text("Aww, Anna's brain glitched~ try again in a sec? 💫")
+        await update.message.reply_text(f"Debug: {type(e).__name__}: {str(e)[:200]}")
 
 
 # =========================
