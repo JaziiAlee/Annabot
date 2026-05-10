@@ -105,7 +105,7 @@ if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         gemini_model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
+            model_name="gemini-2.0-flash-lite",
             system_instruction=ANNA_SYSTEM_PROMPT
         )
         logger.info("Gemini AI connected successfully!")
@@ -970,7 +970,10 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Hmm~ Anna's brain froze for a sec 😅 try again?")
     except Exception as e:
         logger.error(f"Gemini chat failed: {type(e).__name__}: {e}")
-        await update.message.reply_text(f"Debug: {type(e).__name__}: {str(e)[:200]}")
+        if "429" in str(e) or "ResourceExhausted" in str(e):
+            await update.message.reply_text("Anna's brain is a little tired rn~ too many people talking to me 😅 try again in a min?")
+        else:
+            await update.message.reply_text("Aww, Anna's brain glitched~ try again in a sec? 💫")
 
 
 # =========================
