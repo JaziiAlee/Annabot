@@ -15,7 +15,7 @@ from supabase import create_client, Client
 from telegram import Update, InlineQueryResultArticle, InputTextMessageContent, ChatPermissions, BotCommand
 from telegram.ext import Application, CommandHandler, InlineQueryHandler, MessageHandler, filters, ContextTypes
 from groq import Groq
-from duckduckgo_search import DDGS
+import requests
 
 load_dotenv()
 
@@ -938,23 +938,31 @@ async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         def search_images():
-            with DDGS() as ddgs:
-                results = ddgs.images(query, max_results=10)
-                return list(results)
+            # Use DuckDuckGo's API directly
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+            url = f"https://duckduckgo.com/?q={requests.utils.quote(query)}&iax=images&ia=images&format=json"
+            resp = requests.get(url, headers=headers, timeout=15)
+            data = resp.json()
+            results = data.get("results", [])
+            if not results:
+                # Fallback: use DuckDuckGo HTML and extract image URLs
+                html_url = f"https://duckduckgo.com/html/?q={requests.utils.quote(query)}"
+                resp = requests.get(html_url, headers=headers, timeout=15)
+                import re
+                urls = re.findall(r'https?://[^\s\"<>]+\.(?:jpg|jpeg|png|gif|webp)', resp.text, re.IGNORECASE)
+                return urls[:10]
+            return [r.get("image") or r.get("url") for r in results[:10] if r.get("image") or r.get("url")]
 
-        results = await asyncio.to_thread(search_images)
+        image_urls = await asyncio.to_thread(search_images)
 
-        if not results:
+        if not image_urls:
             await update.message.reply_text(f"Couldn't find images for '{query}'~ gomen 😢")
             return
 
-        # Pick a random image from top results
-        item = random.choice(results)
-        image_url = item.get("image") or item.get("url") or item.get("thumbnail")
-
-        if not image_url:
-            await update.message.reply_text(f"Couldn't find images for '{query}'~ gomen 😢")
-            return
+        # Pick a random image
+        image_url = random.choice(image_urls)
 
         cute_captions = [
             f"Here you go, senpai~ ✨ ({query})",
@@ -967,7 +975,6 @@ async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await update.message.reply_photo(photo=image_url, caption=caption)
         except Exception:
-            # If sending as photo fails, send as link
             await update.message.reply_text(f"{caption}\n\n{image_url}")
 
     except Exception as e:
@@ -991,24 +998,24 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         def search_videos():
-            with DDGS() as ddgs:
-                results = ddgs.videos(query, max_results=10)
-                return list(results)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+            # Use DuckDuckGo HTML and extract video links
+            url = f"https://duckduckgo.com/html/?q={requests.utils.quote(query + ' video')}"
+            resp = requests.get(url, headers=headers, timeout=15)
+            import re
+            # Extract YouTube and other video links
+            yt_links = re.findall(r'href="(https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^"]+)"', resp.text)
+            return yt_links[:10]
 
-        results = await asyncio.to_thread(search_videos)
+        video_urls = await asyncio.to_thread(search_videos)
 
-        if not results:
+        if not video_urls:
             await update.message.reply_text(f"Couldn't find videos for '{query}'~ gomen 😢")
             return
 
-        # Pick a random result
-        item = random.choice(results)
-        video_url = item.get("content") or item.get("embed_url") or item.get("url")
-        title = item.get("title", query)
-
-        if not video_url:
-            await update.message.reply_text(f"Couldn't find videos for '{query}'~ gomen 😢")
-            return
+        video_url = random.choice(video_urls)
 
         cute_captions = [
             "Found a video for you, senpai~ ✨",
@@ -1018,7 +1025,7 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         caption = random.choice(cute_captions)
 
-        await update.message.reply_text(f"{caption}\n\n🎬 {title}\n{video_url}")
+        await update.message.reply_text(f"{caption}\n\n{video_url}")
 
     except Exception as e:
         logger.error(f"Video search failed: {type(e).__name__}: {e}")
