@@ -14,7 +14,7 @@ from langdetect import detect, DetectorFactory, LangDetectException
 from supabase import create_client, Client
 from telegram import Update, InlineQueryResultArticle, InputTextMessageContent, ChatPermissions, BotCommand
 from telegram.ext import Application, CommandHandler, InlineQueryHandler, MessageHandler, filters, ContextTypes
-import google.generativeai as genai
+from groq import Groq
 
 load_dotenv()
 
@@ -29,7 +29,7 @@ STICKER_PACKS = ["koly_alcohol"]
 # Supabase config
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN is missing! Set it in Render Environment Variables.")
@@ -101,19 +101,18 @@ Default tone: Cute, warm, playful, flirty, wholesome, and helpful.
 Keep responses under 200 characters when possible. Never exceed 500 characters."""
 
 gemini_model = None
-if GEMINI_API_KEY:
+if GROQ_API_KEY:
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        gemini_model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash-lite",
-            system_instruction=ANNA_SYSTEM_PROMPT
-        )
-        logger.info("Gemini AI connected successfully!")
+        groq_client = Groq(api_key=GROQ_API_KEY)
+        gemini_model = True  # Flag that AI is available
+        logger.info("Groq AI connected successfully!")
     except Exception as e:
-        logger.error(f"Gemini setup failed: {e}")
+        logger.error(f"Groq setup failed: {e}")
+        groq_client = None
         gemini_model = None
 else:
-    logger.warning("GEMINI_API_KEY not found. Anna personality disabled.")
+    groq_client = None
+    logger.warning("GROQ_API_KEY not found. Anna personality disabled.")
 
 # Flask app for health check
 app = Flask(__name__)
@@ -960,17 +959,26 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         prompt = f"[Context: {chat_context}] [User '{user_name}' says]: {text}"
         response = await asyncio.to_thread(
-            lambda: gemini_model.generate_content(prompt).text
+            lambda: groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": ANNA_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=300,
+                temperature=0.9
+            )
         )
-        if response:
-            response = response.strip()[:500]
-            await update.message.reply_text(response)
+        if response and response.choices:
+            reply = response.choices[0].message.content.strip()[:500]
+            if reply:
+                await update.message.reply_text(reply)
         else:
-            logger.warning("Gemini returned empty response")
+            logger.warning("Groq returned empty response")
             await update.message.reply_text("Hmm~ Anna's brain froze for a sec 😅 try again?")
     except Exception as e:
-        logger.error(f"Gemini chat failed: {type(e).__name__}: {e}")
-        if "429" in str(e) or "ResourceExhausted" in str(e):
+        logger.error(f"Groq chat failed: {type(e).__name__}: {e}")
+        if "429" in str(e) or "rate" in str(e).lower():
             await update.message.reply_text("Anna's brain is a little tired rn~ too many people talking to me 😅 try again in a min?")
         else:
             await update.message.reply_text("Aww, Anna's brain glitched~ try again in a sec? 💫")
