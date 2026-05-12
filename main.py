@@ -1193,7 +1193,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 response = await asyncio.to_thread(
                     lambda: openrouter_client.chat.completions.create(
-                        model="mistralai/mistral-7b-instruct:free",
+                        model="qwen/qwen-2.5-7b-instruct:free",
                         messages=[
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": prompt}
