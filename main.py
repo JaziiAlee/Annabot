@@ -1014,6 +1014,36 @@ async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
+# WEB SEARCH HELPER
+# =========================
+async def web_search(query, num_results=3):
+    """Search the web using Google Custom Search and return snippets."""
+    if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
+        return None
+    try:
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {
+            "key": GOOGLE_API_KEY,
+            "cx": GOOGLE_CSE_ID,
+            "q": query,
+            "num": num_results,
+        }
+        response = await asyncio.to_thread(lambda: requests.get(url, params=params))
+        data = response.json()
+        if "items" not in data:
+            return None
+        results = []
+        for item in data["items"]:
+            title = item.get("title", "")
+            snippet = item.get("snippet", "")
+            results.append(f"{title}: {snippet}")
+        return "\n".join(results)
+    except Exception as e:
+        logger.error(f"Web search failed: {e}")
+        return None
+
+
+# =========================
 # ANNA PERSONALITY CHAT
 # =========================
 # Rate limit tracking (using lists as mutable refs to avoid global keyword)
@@ -1084,7 +1114,20 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         system_prompt = ANNA_BASE_PROMPT + ANNA_SFW_RULES
 
     try:
-        prompt = f"[Context: {chat_context}] [User '{user_name}' says]: {text}"
+        # Check if the message looks like a question that needs web search
+        question_indicators = ["what is", "what's", "who is", "who's", "how to", "how do", "when did", "when is", "where is", "why is", "why do", "tell me about", "explain", "define", "meaning of", "latest", "news", "update on", "search for", "look up", "find out"]
+        needs_search = any(indicator in text_lower for indicator in question_indicators)
+
+        search_context = ""
+        if needs_search and GOOGLE_API_KEY and GOOGLE_CSE_ID:
+            # Extract the actual question (remove "anna" from the query)
+            search_query = text_lower.replace("anna", "").replace(f"@{bot_username}", "").strip()
+            if len(search_query) > 3:
+                search_results = await web_search(search_query)
+                if search_results:
+                    search_context = f"\n\n[Web search results for '{search_query}':\n{search_results}]\n\nUse these search results to answer accurately, but respond in Anna's cute style. Keep it short."
+
+        prompt = f"[Context: {chat_context}] [User '{user_name}' says]: {text}{search_context}"
 
         # Try Groq first, fallback to Cerebras
         response = None
