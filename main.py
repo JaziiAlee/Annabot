@@ -223,6 +223,8 @@ USERS_DB = "users_db.json"
 GROUPS_DB = "groups_db.json"
 ADMINS_DB = "admins_db.json"
 STICKERS_DB = "stickers.json"
+DM_USERS_DB = "dm_users_db.json"
+DM_MESSAGES_DB = "dm_messages_db.json"
 
 
 def load_json(path, default):
@@ -252,6 +254,8 @@ class Database:
         self.groups = {}
         self.admins = {"owner_id": None, "admins": []}
         self.stickers = []
+        self.dm_users = {}       # user_id -> chat_id (DM tracking)
+        self.dm_messages = []    # [(chat_id, message_id)]
         self._load_all()
 
     def _load_all(self):
@@ -278,6 +282,14 @@ class Database:
                 result = supabase.table("stickers").select("*").execute()
                 self.stickers = [row["file_id"] for row in result.data]
 
+                # Load DM users
+                result = supabase.table("dm_users").select("*").execute()
+                self.dm_users = {str(row["user_id"]): str(row["chat_id"]) for row in result.data}
+
+                # Load DM messages
+                result = supabase.table("dm_messages").select("*").execute()
+                self.dm_messages = [(str(row["chat_id"]), row["message_id"]) for row in result.data]
+
                 logger.info("Data loaded from Supabase!")
                 return
             except Exception as e:
@@ -288,6 +300,8 @@ class Database:
         self.groups = load_json(GROUPS_DB, {})
         self.admins = load_json(ADMINS_DB, {"owner_id": None, "admins": []})
         self.stickers = load_json(STICKERS_DB, [])
+        self.dm_users = load_json(DM_USERS_DB, {})
+        self.dm_messages = load_json(DM_MESSAGES_DB, [])
 
     def save_user(self, username, user_id):
         """Save a single user using upsert instead of delete-all + re-insert."""
@@ -339,6 +353,78 @@ class Database:
                 logger.error(f"Supabase save stickers failed: {e}")
         save_json(STICKERS_DB, self.stickers)
 
+    def save_dm_users(self):
+        if supabase:
+            try:
+                supabase.table("dm_users").delete().neq("user_id", "").execute()
+                for user_id, chat_id in self.dm_users.items():
+                    supabase.table("dm_users").insert({"user_id": int(user_id), "chat_id": int(chat_id)}).execute()
+                return
+            except Exception as e:
+                logger.error(f"Supabase save dm_users failed: {e}")
+        save_json(DM_USERS_DB, self.dm_users)
+
+    def save_dm_messages(self):
+        if supabase:
+            try:
+                supabase.table("dm_messages").delete().gte("id", 0).execute()
+                for chat_id, message_id in self.dm_messages:
+                    supabase.table("dm_messages").insert({"chat_id": int(chat_id), "message_id": int(message_id)}).execute()
+                return
+            except Exception as e:
+                logger.error(f"Supabase save dm_messages failed: {e}")
+        save_json(DM_MESSAGES_DB, self.dm_messages)
+
+    def clear_dm_data(self, owner_id=None):
+        """Wipe only DM data: dm_users, dm_messages, and DM user records from users table."""
+        # Delete DM users from main users table (skip owner)
+        owner_id_str = str(owner_id) if owner_id else None
+        for user_id in list(self.dm_users.keys()):
+            if owner_id_str and user_id == owner_id_str:
+                continue
+            # Find and remove from users mapping
+            usernames_to_remove = [u for u, uid in self.users.items() if uid == user_id]
+            for username in usernames_to_remove:
+                del self.users[username]
+            # Also delete from Supabase users table
+            if supabase:
+                try:
+                    supabase.table("users").delete().eq("user_id", user_id).execute()
+                except Exception as e:
+                    logger.error(f"Supabase delete user failed: {e}")
+
+        # Save cleaned users table
+        if supabase:
+            try:
+                supabase.table("users").delete().neq("username", "").execute()
+                for username, user_id in self.users.items():
+                    supabase.table("users").insert({"username": username, "user_id": user_id}).execute()
+            except Exception as e:
+                logger.error(f"Supabase refresh users failed: {e}")
+        save_json(USERS_DB, self.users)
+
+        # Delete local DM JSON files
+        for path in [DM_USERS_DB, DM_MESSAGES_DB]:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                    logger.info(f"Deleted local file: {path}")
+                except Exception as e:
+                    logger.error(f"Failed to delete {path}: {e}")
+
+        # Clear DM tables in Supabase
+        if supabase:
+            try:
+                supabase.table("dm_users").delete().neq("user_id", "").execute()
+                supabase.table("dm_messages").delete().gte("id", 0).execute()
+                logger.info("Supabase DM data wiped.")
+            except Exception as e:
+                logger.error(f"Supabase DM wipe failed: {e}")
+
+        # Reset in-memory DM state
+        self.dm_users = {}
+        self.dm_messages = []
+
     def clear_all(self):
         """Wipe all data from Supabase, local JSON files, and memory."""
         # Clear Supabase
@@ -378,7 +464,7 @@ _pending_deletions = {}
 # =========================
 # USER TRACKING
 # =========================
-def track_user(user):
+def track_user(user, chat=None):
     """Track username -> user_id mapping whenever we see a user."""
     if not user or not user.username:
         return
@@ -387,6 +473,12 @@ def track_user(user):
     if username not in db.users or db.users[username] != user_id:
         db.users[username] = user_id
         db.save_user(username, user_id)
+    # Track DM users separately
+    if chat and chat.type == "private":
+        chat_id = str(chat.id)
+        if user_id not in db.dm_users or db.dm_users[user_id] != chat_id:
+            db.dm_users[user_id] = chat_id
+            db.save_dm_users()
 
 
 # =========================
@@ -435,7 +527,7 @@ async def setup_commands(application):
         BotCommand("disableauto", "Disable auto-translate (admin only)"),
         BotCommand("status", "Check bot status"),
         BotCommand("goon", "Send a random sticker"),
-        BotCommand("deletedata", "Wipe all stored data (owner only)"),
+        BotCommand("deletedata", "Wipe all DM data (owner only)"),
     ]
     await application.bot.set_my_commands(commands)
 
@@ -444,7 +536,7 @@ async def setup_commands(application):
 # COMMAND HANDLERS
 # =========================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    track_user(update.effective_user)
+    track_user(update.effective_user, update.effective_chat)
     user_name = update.effective_user.first_name or "friend"
     text = (
         f"Hiii~ {user_name}! I'm Anna, your cute AI companion 💫\n\n"
@@ -463,7 +555,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    track_user(update.effective_user)
+    track_user(update.effective_user, update.effective_chat)
     text = (
         "Anna's command list~ 📋✨\n\n"
         "🌸 Translate:\n"
@@ -479,7 +571,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /addadmin /removeadmin /listadmins\n"
         "  /image <text> - Generate an image\n"
         "  /video <text> - Search a video\n"
-        "  /deletedata - Wipe all stored data\n\n"
+        "  /deletedata - Wipe all DM data\n\n"
         "🎀 Fun:\n"
         "  /goon - Random sticker hehe~"
     )
@@ -490,7 +582,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # TRANSLATE COMMAND (reply)
 # =========================
 async def translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    track_user(update.effective_user)
+    track_user(update.effective_user, update.effective_chat)
     if not update.message.reply_to_message or not update.message.reply_to_message.text:
         await update.message.reply_text("Reply to a message with /translate to translate it~ 💫")
         return
@@ -530,7 +622,7 @@ async def get_target_from_reply(update):
 # MUTE / UNMUTE / KICK
 # =========================
 async def mute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    track_user(update.effective_user)
+    track_user(update.effective_user, update.effective_chat)
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
@@ -574,7 +666,7 @@ async def mute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def unmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    track_user(update.effective_user)
+    track_user(update.effective_user, update.effective_chat)
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
@@ -621,7 +713,7 @@ async def unmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def kick_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    track_user(update.effective_user)
+    track_user(update.effective_user, update.effective_chat)
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
@@ -660,7 +752,7 @@ async def kick_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # AUTO-TRANSLATE TOGGLE
 # =========================
 async def auto_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    track_user(update.effective_user)
+    track_user(update.effective_user, update.effective_chat)
     chat_id = str(update.effective_chat.id)
     user_id = update.effective_user.id
 
@@ -683,7 +775,7 @@ async def auto_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def disableauto_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    track_user(update.effective_user)
+    track_user(update.effective_user, update.effective_chat)
     chat_id = str(update.effective_chat.id)
     user_id = update.effective_user.id
 
@@ -706,7 +798,7 @@ async def disableauto_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    track_user(update.effective_user)
+    track_user(update.effective_user, update.effective_chat)
     chat_id = str(update.effective_chat.id)
 
     if is_private_chat(update):
@@ -739,7 +831,7 @@ async def auto_translate_message(update: Update, context: ContextTypes.DEFAULT_T
 
     # Track user on every message
     if update.message.from_user:
-        track_user(update.message.from_user)
+        track_user(update.message.from_user, update.effective_chat)
 
     chat_id = str(update.effective_chat.id)
 
@@ -774,7 +866,7 @@ async def auto_translate_message(update: Update, context: ContextTypes.DEFAULT_T
 # OWNER MANAGEMENT
 # =========================
 async def setowner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    track_user(update.effective_user)
+    track_user(update.effective_user, update.effective_chat)
     user_id = update.effective_user.id
 
     if not is_private_chat(update):
@@ -795,7 +887,7 @@ async def setowner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def addadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    track_user(update.effective_user)
+    track_user(update.effective_user, update.effective_chat)
     user_id = update.effective_user.id
 
     if not is_owner(user_id):
@@ -825,7 +917,7 @@ async def addadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def removeadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    track_user(update.effective_user)
+    track_user(update.effective_user, update.effective_chat)
     user_id = update.effective_user.id
 
     if not is_owner(user_id):
@@ -854,7 +946,7 @@ async def removeadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def listadmins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    track_user(update.effective_user)
+    track_user(update.effective_user, update.effective_chat)
     user_id = update.effective_user.id
 
     if not is_owner(user_id):
@@ -884,8 +976,8 @@ async def listadmins_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def deletedata_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Permanently delete all stored data. Owner only with confirmation."""
-    track_user(update.effective_user)
+    """Permanently delete all DM data. Owner only with confirmation."""
+    track_user(update.effective_user, update.effective_chat)
     user_id = update.effective_user.id
 
     if not is_owner(user_id):
@@ -903,29 +995,52 @@ async def deletedata_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
             return
 
-        # Proceed with wipe
-        db.clear_all()
+        # Proceed with DM-only wipe
+        owner_id = get_owner_id()
+        dm_count = len(db.dm_users)
+        msg_count = len(db.dm_messages)
+
+        # Delete bot's own messages in DMs
+        deleted_msgs = 0
+        for chat_id, msg_id in db.dm_messages:
+            try:
+                await context.bot.delete_message(chat_id=int(chat_id), message_id=int(msg_id))
+                deleted_msgs += 1
+                await asyncio.sleep(0.1)  # Rate limit protection
+            except Exception as e:
+                logger.warning(f"Failed to delete message {msg_id} in chat {chat_id}: {e}")
+
+        # Wipe DM data (protects owner automatically)
+        db.clear_dm_data(owner_id=owner_id)
+
         await update.message.reply_text(
-            "⚠️ All data has been permanently wiped:\n"
-            "- Users database\n"
-            "- Groups settings\n"
-            "- Admins list\n"
-            "- Stickers cache\n\n"
-            "Note: Your Telegram chat history remains on Telegram's servers. "
-            "To clear that, delete the conversation manually in Telegram."
+            f"⚠️ DM data permanently wiped:\n"
+            f"- {dm_count} DM users removed from database\n"
+            f"- {msg_count} bot messages deleted\n"
+            f"- DM tracking reset\n\n"
+            f"Kept safe:\n"
+            f"- Owner data\n"
+            f"- Group settings\n"
+            f"- Admin list\n"
+            f"- Sticker cache\n\n"
+            f"Note: Your Telegram chat history remains on Telegram's servers. "
+            f"To fully clear a DM chat, delete the conversation manually in Telegram."
         )
-        logger.info(f"Owner {user_id} wiped all data.")
+        logger.info(f"Owner {user_id} wiped {dm_count} DM users and {deleted_msgs} messages.")
         return
 
     # First request — ask for confirmation
     _pending_deletions[user_id] = time.time()
     await update.message.reply_text(
         "⚠️ WARNING\n\n"
-        "This will permanently delete ALL stored data:\n"
-        "- Users database\n"
-        "- Groups settings\n"
-        "- Admins list\n"
-        "- Stickers cache\n\n"
+        "This will permanently delete ALL private DM data:\n"
+        "- DM user records\n"
+        "- Bot messages in DMs\n"
+        "- DM tracking\n\n"
+        "Kept safe:\n"
+        "- Owner data\n"
+        "- Group settings\n"
+        "- Admin list\n\n"
         "This action CANNOT be undone.\n\n"
         "Reply with '/deletedata confirm' within 60 seconds to proceed."
     )
@@ -936,7 +1051,7 @@ async def deletedata_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # =========================
 async def goon_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a random sticker from sticker packs."""
-    track_user(update.effective_user)
+    track_user(update.effective_user, update.effective_chat)
 
     if not db.stickers:
         for pack_name in STICKER_PACKS:
@@ -1032,7 +1147,7 @@ async def inline_translate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generate an image from text using Pollinations.ai. Owner only."""
-    track_user(update.effective_user)
+    track_user(update.effective_user, update.effective_chat)
     user_id = update.effective_user.id
 
     if not is_owner(user_id):
@@ -1066,7 +1181,7 @@ async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def video_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Search and send a video link from the internet. Owner only."""
-    track_user(update.effective_user)
+    track_user(update.effective_user, update.effective_chat)
     user_id = update.effective_user.id
 
     if not is_owner(user_id):
@@ -1170,7 +1285,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Track user
     if update.message.from_user:
-        track_user(update.message.from_user)
+        track_user(update.message.from_user, update.effective_chat)
 
     text = update.message.text
     chat_id = update.effective_chat.id
@@ -1298,7 +1413,11 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if response and response.choices:
             reply = response.choices[0].message.content.strip()[:500]
             if reply:
-                await update.message.reply_text(reply)
+                sent_msg = await update.message.reply_text(reply)
+                # Track bot messages in DMs for later deletion
+                if is_private:
+                    db.dm_messages.append((str(chat_id), sent_msg.message_id))
+                    db.save_dm_messages()
         elif not response:
             # All providers failed
             _rate_limit_until_ref[0] = time.time() + 60
