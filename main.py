@@ -455,7 +455,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Admin stuff:\n"
         "/mute /unmute /kick /auto /disableauto\n\n"
         "Owner stuff:\n"
-        "/addadmin /removeadmin /listadmins\n\n"
+        "/addadmin /removeadmin /listadmins\n"
+        "/image /video /deletedata\n\n"
         "Fun: /goon for a random sticker~ ✨"
     )
     await update.message.reply_text(text)
