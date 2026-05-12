@@ -1169,6 +1169,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.warning(f"Groq rate limited, trying Cerebras...")
                 else:
                     logger.error(f"Groq failed: {groq_err}")
+                    await update.message.reply_text(f"[Groq]: {str(groq_err)[:100]}")
 
         # Fallback to Cerebras if Groq failed
         if not response and cerebras_client:
@@ -1187,6 +1188,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 used_provider = "cerebras"
             except Exception as cerebras_err:
                 logger.error(f"Cerebras also failed: {cerebras_err}")
+                await update.message.reply_text(f"[Cerebras]: {str(cerebras_err)[:100]}")
 
         # Fallback to OpenRouter if both failed
         if not response and openrouter_client:
@@ -1205,6 +1207,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 used_provider = "openrouter"
             except Exception as or_err:
                 logger.error(f"OpenRouter also failed: {or_err}")
+                await update.message.reply_text(f"[OpenRouter]: {str(or_err)[:100]}")
 
         if response and response.choices:
             reply = response.choices[0].message.content.strip()[:500]
@@ -1221,7 +1224,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Hmm~ Anna's brain froze for a sec 😅 try again?")
     except Exception as e:
         logger.error(f"Anna chat failed: {type(e).__name__}: {e}")
-        await update.message.reply_text("Aww, Anna's brain glitched~ try again in a sec? 💫")
+        await update.message.reply_text(f"Debug: {type(e).__name__}: {str(e)[:200]}")
 
 
 # =========================
