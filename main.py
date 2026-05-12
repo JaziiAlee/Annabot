@@ -977,73 +977,81 @@ async def listadmins_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def deletedata_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Permanently delete all DM data. Owner only with confirmation."""
-    track_user(update.effective_user, update.effective_chat)
-    user_id = update.effective_user.id
+    try:
+        track_user(update.effective_user, update.effective_chat)
+        user_id = update.effective_user.id
 
-    if not is_owner(user_id):
-        await update.message.reply_text("Only the bot owner can use this command.")
-        return
-
-    # Check for confirmation argument
-    args = context.args
-    if args and args[0].lower() == "confirm":
-        # Verify there was a pending request within 60 seconds
-        pending_time = _pending_deletions.pop(user_id, None)
-        if not pending_time or (time.time() - pending_time) > 60:
-            await update.message.reply_text(
-                "Confirmation expired or not requested. Use /deletedata first, then /deletedata confirm within 60 seconds."
-            )
+        if not is_owner(user_id):
+            await update.message.reply_text("Only the bot owner can use this command.")
             return
 
-        # Proceed with DM-only wipe
-        owner_id = get_owner_id()
-        dm_count = len(db.dm_users)
-        msg_count = len(db.dm_messages)
+        # Check for confirmation argument
+        args = context.args
+        if args and args[0].lower() == "confirm":
+            # Verify there was a pending request within 60 seconds
+            pending_time = _pending_deletions.pop(user_id, None)
+            if not pending_time or (time.time() - pending_time) > 60:
+                await update.message.reply_text(
+                    "Confirmation expired or not requested. Use /deletedata first, then /deletedata confirm within 60 seconds."
+                )
+                return
 
-        # Delete bot's own messages in DMs
-        deleted_msgs = 0
-        for chat_id, msg_id in db.dm_messages:
-            try:
-                await context.bot.delete_message(chat_id=int(chat_id), message_id=int(msg_id))
-                deleted_msgs += 1
-                await asyncio.sleep(0.1)  # Rate limit protection
-            except Exception as e:
-                logger.warning(f"Failed to delete message {msg_id} in chat {chat_id}: {e}")
+            # Proceed with DM-only wipe
+            owner_id = get_owner_id()
+            dm_count = len(db.dm_users)
+            msg_count = len(db.dm_messages)
 
-        # Wipe DM data (protects owner automatically)
-        db.clear_dm_data(owner_id=owner_id)
+            # Delete bot's own messages in DMs
+            deleted_msgs = 0
+            for chat_id, msg_id in db.dm_messages:
+                try:
+                    await context.bot.delete_message(chat_id=int(chat_id), message_id=int(msg_id))
+                    deleted_msgs += 1
+                    await asyncio.sleep(0.1)  # Rate limit protection
+                except Exception as e:
+                    logger.warning(f"Failed to delete message {msg_id} in chat {chat_id}: {e}")
 
+            # Wipe DM data (protects owner automatically)
+            db.clear_dm_data(owner_id=owner_id)
+
+            await update.message.reply_text(
+                f"✅ Data wipe complete!\n\n"
+                f"Wiped:\n"
+                f"- {dm_count} DM users removed from database\n"
+                f"- {deleted_msgs} bot messages deleted from DMs\n"
+                f"- DM tracking reset\n\n"
+                f"Kept safe:\n"
+                f"- Owner data\n"
+                f"- Group settings\n"
+                f"- Admin list\n"
+                f"- Sticker cache\n\n"
+                f"Note: Your Telegram chat history remains on Telegram's servers. "
+                f"To fully clear a DM chat, delete the conversation manually in Telegram."
+            )
+            logger.info(f"Owner {user_id} wiped {dm_count} DM users and {deleted_msgs} messages.")
+            return
+
+        # First request — ask for confirmation
+        _pending_deletions[user_id] = time.time()
         await update.message.reply_text(
-            f"⚠️ DM data permanently wiped:\n"
-            f"- {dm_count} DM users removed from database\n"
-            f"- {msg_count} bot messages deleted\n"
-            f"- DM tracking reset\n\n"
-            f"Kept safe:\n"
-            f"- Owner data\n"
-            f"- Group settings\n"
-            f"- Admin list\n"
-            f"- Sticker cache\n\n"
-            f"Note: Your Telegram chat history remains on Telegram's servers. "
-            f"To fully clear a DM chat, delete the conversation manually in Telegram."
+            "⚠️ WARNING\n\n"
+            "This will permanently delete ALL private DM data:\n"
+            "- DM user records\n"
+            "- Bot messages in DMs\n"
+            "- DM tracking\n\n"
+            "Kept safe:\n"
+            "- Owner data\n"
+            "- Group settings\n"
+            "- Admin list\n\n"
+            "This action CANNOT be undone.\n\n"
+            "Reply with '/deletedata confirm' within 60 seconds to proceed."
         )
-        logger.info(f"Owner {user_id} wiped {dm_count} DM users and {deleted_msgs} messages.")
-        return
-
-    # First request — ask for confirmation
-    _pending_deletions[user_id] = time.time()
-    await update.message.reply_text(
-        "⚠️ WARNING\n\n"
-        "This will permanently delete ALL private DM data:\n"
-        "- DM user records\n"
-        "- Bot messages in DMs\n"
-        "- DM tracking\n\n"
-        "Kept safe:\n"
-        "- Owner data\n"
-        "- Group settings\n"
-        "- Admin list\n\n"
-        "This action CANNOT be undone.\n\n"
-        "Reply with '/deletedata confirm' within 60 seconds to proceed."
-    )
+    except Exception as e:
+        logger.error(f"deletedata_command error: {type(e).__name__}: {e}")
+        try:
+            await update.message.reply_text(f"Error in deletedata: {type(e).__name__}: {str(e)[:200]}")
+        except:
+            pass
 
 
 # =========================
