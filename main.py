@@ -339,9 +339,40 @@ class Database:
                 logger.error(f"Supabase save stickers failed: {e}")
         save_json(STICKERS_DB, self.stickers)
 
+    def clear_all(self):
+        """Wipe all data from Supabase, local JSON files, and memory."""
+        # Clear Supabase
+        if supabase:
+            try:
+                supabase.table("users").delete().neq("username", "").execute()
+                supabase.table("groups").delete().neq("chat_id", "").execute()
+                supabase.table("admins").delete().gte("id", 0).execute()
+                supabase.table("stickers").delete().neq("file_id", "").execute()
+                logger.info("All Supabase data wiped.")
+            except Exception as e:
+                logger.error(f"Supabase wipe failed: {e}")
+
+        # Delete local JSON files
+        for path in [USERS_DB, GROUPS_DB, ADMINS_DB, STICKERS_DB]:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                    logger.info(f"Deleted local file: {path}")
+                except Exception as e:
+                    logger.error(f"Failed to delete {path}: {e}")
+
+        # Reset in-memory state
+        self.users = {}
+        self.groups = {}
+        self.admins = {"owner_id": None, "admins": []}
+        self.stickers = []
+
 
 # Initialize database
 db = Database()
+
+# Track pending data-deletion confirmations: {user_id: timestamp}
+_pending_deletions = {}
 
 
 # =========================
@@ -404,6 +435,7 @@ async def setup_commands(application):
         BotCommand("disableauto", "Disable auto-translate (admin only)"),
         BotCommand("status", "Check bot status"),
         BotCommand("goon", "Send a random sticker"),
+        BotCommand("deletedata", "Wipe all stored data (owner only)"),
     ]
     await application.bot.set_my_commands(commands)
 
@@ -443,7 +475,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /auto - Auto-translate on\n"
         "  /disableauto - Auto-translate off\n\n"
         "👑 Owner:\n"
-        "  /addadmin /removeadmin /listadmins\n\n"
+        "  /addadmin /removeadmin /listadmins\n"
+        "  /image <text> - Generate an image\n"
+        "  /video <text> - Search a video\n"
+        "  /deletedata - Wipe all stored data\n\n"
         "🎀 Fun:\n"
         "  /goon - Random sticker hehe~"
     )
@@ -845,6 +880,54 @@ async def listadmins_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         text += "No admins configured."
 
     await update.message.reply_text(text)
+
+
+async def deletedata_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Permanently delete all stored data. Owner only with confirmation."""
+    track_user(update.effective_user)
+    user_id = update.effective_user.id
+
+    if not is_owner(user_id):
+        await update.message.reply_text("Only the bot owner can use this command.")
+        return
+
+    # Check for confirmation argument
+    args = context.args
+    if args and args[0].lower() == "confirm":
+        # Verify there was a pending request within 60 seconds
+        pending_time = _pending_deletions.pop(user_id, None)
+        if not pending_time or (time.time() - pending_time) > 60:
+            await update.message.reply_text(
+                "Confirmation expired or not requested. Use /deletedata first, then /deletedata confirm within 60 seconds."
+            )
+            return
+
+        # Proceed with wipe
+        db.clear_all()
+        await update.message.reply_text(
+            "⚠️ All data has been permanently wiped:\n"
+            "- Users database\n"
+            "- Groups settings\n"
+            "- Admins list\n"
+            "- Stickers cache\n\n"
+            "Note: Your Telegram chat history remains on Telegram's servers. "
+            "To clear that, delete the conversation manually in Telegram."
+        )
+        logger.info(f"Owner {user_id} wiped all data.")
+        return
+
+    # First request — ask for confirmation
+    _pending_deletions[user_id] = time.time()
+    await update.message.reply_text(
+        "⚠️ WARNING\n\n"
+        "This will permanently delete ALL stored data:\n"
+        "- Users database\n"
+        "- Groups settings\n"
+        "- Admins list\n"
+        "- Stickers cache\n\n"
+        "This action CANNOT be undone.\n\n"
+        "Reply with '/deletedata confirm' within 60 seconds to proceed."
+    )
 
 
 # =========================
@@ -1257,6 +1340,7 @@ def run_bot():
             application.add_handler(CommandHandler("addadmin", addadmin_command))
             application.add_handler(CommandHandler("removeadmin", removeadmin_command))
             application.add_handler(CommandHandler("listadmins", listadmins_command))
+            application.add_handler(CommandHandler("deletedata", deletedata_command))
             application.add_handler(CommandHandler("goon", goon_command))
             application.add_handler(CommandHandler("image", image_command))
             application.add_handler(CommandHandler("video", video_command))
