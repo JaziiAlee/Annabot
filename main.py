@@ -37,6 +37,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN is missing! Set it in Render Environment Variables.")
@@ -160,6 +161,20 @@ if CEREBRAS_API_KEY:
         logger.info("Cerebras AI connected as fallback!")
     except Exception as e:
         logger.error(f"Cerebras setup failed: {e}")
+
+openrouter_client = None
+if OPENROUTER_API_KEY:
+    try:
+        from openai import OpenAI as OpenRouterClient
+        openrouter_client = OpenRouterClient(
+            api_key=OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1"
+        )
+        if not gemini_model:
+            gemini_model = True
+        logger.info("OpenRouter AI connected as fallback #2!")
+    except Exception as e:
+        logger.error(f"OpenRouter setup failed: {e}")
 
 if not gemini_model:
     logger.warning("No AI provider configured. Anna personality disabled.")
@@ -1117,7 +1132,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         # Check if the message looks like a question that needs web search
-        question_indicators = ["what is", "what's", "who is", "who's", "how to", "how do", "when did", "when is", "where is", "why is", "why do", "tell me about", "explain", "define", "meaning of", "latest", "news", "update on", "search for", "look up", "find out"]
+        question_indicators = ["what is", "what's", "what are", "who is", "who's", "how to", "how do", "how does", "when did", "when is", "when was", "where is", "where do", "why is", "why do", "why does", "tell me about", "explain", "define", "meaning of", "latest", "news", "update on", "search for", "look up", "find out", "can you tell me", "do you know", "have you heard", "is it true", "is there"]
         needs_search = any(indicator in text_lower for indicator in question_indicators)
 
         search_context = ""
@@ -1173,16 +1188,34 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as cerebras_err:
                 logger.error(f"Cerebras also failed: {cerebras_err}")
 
+        # Fallback to OpenRouter if both failed
+        if not response and openrouter_client:
+            try:
+                response = await asyncio.to_thread(
+                    lambda: openrouter_client.chat.completions.create(
+                        model="mistralai/mistral-7b-instruct:free",
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": prompt}
+                        ],
+                        max_tokens=300,
+                        temperature=0.9
+                    )
+                )
+                used_provider = "openrouter"
+            except Exception as or_err:
+                logger.error(f"OpenRouter also failed: {or_err}")
+
         if response and response.choices:
             reply = response.choices[0].message.content.strip()[:500]
             if reply:
                 await update.message.reply_text(reply)
         elif not response:
-            # Both providers failed
+            # All providers failed
             _rate_limit_until_ref[0] = time.time() + 60
             if not _rate_limit_notified_ref[0]:
                 _rate_limit_notified_ref[0] = True
-                await update.message.reply_text("Anna's brain is a little tired rn~ both my providers are busy 😅 chat with me again in 1 min okay?")
+                await update.message.reply_text("Anna's brain is a little tired rn~ all my providers are busy 😅 chat with me again in 1 min okay?")
         else:
             logger.warning("AI returned empty response")
             await update.message.reply_text("Hmm~ Anna's brain froze for a sec 😅 try again?")
