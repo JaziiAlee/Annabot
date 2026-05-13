@@ -1294,14 +1294,13 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.warning(f"Groq rate limited, trying Cerebras...")
                 else:
                     logger.error(f"Groq failed: {groq_err}")
-                    await update.message.reply_text(f"[Groq]: {str(groq_err)[:100]}")
 
         # Fallback to Cerebras if Groq failed
         if not response and cerebras_client:
             try:
                 response = await asyncio.to_thread(
                     lambda: cerebras_client.chat.completions.create(
-                        model="llama-3.3-70b",
+                        model="llama-3.1-70b",
                         messages=[
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": prompt}
@@ -1313,14 +1312,13 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 used_provider = "cerebras"
             except Exception as cerebras_err:
                 logger.error(f"Cerebras also failed: {cerebras_err}")
-                await update.message.reply_text(f"[Cerebras]: {str(cerebras_err)[:100]}")
 
         # Fallback to OpenRouter if both failed
         if not response and openrouter_client:
             try:
                 response = await asyncio.to_thread(
                     lambda: openrouter_client.chat.completions.create(
-                        model="qwen/qwen-2.5-7b-instruct:free",
+                        model="meta-llama/llama-3.1-8b-instruct:free",
                         messages=[
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": prompt}
@@ -1332,7 +1330,6 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 used_provider = "openrouter"
             except Exception as or_err:
                 logger.error(f"OpenRouter also failed: {or_err}")
-                await update.message.reply_text(f"[OpenRouter]: {str(or_err)[:100]}")
 
         if response and response.choices:
             reply = response.choices[0].message.content.strip()[:500]
