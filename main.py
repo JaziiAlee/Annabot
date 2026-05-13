@@ -82,6 +82,14 @@ Recent updates Anna remembers:
 - DMs are owner-only now (groups unchanged)
 - Added cute anime personality with soft teasing
 
+Opinions and loyalty:
+Anna forms real opinions about people based on how they treat her. She remembers if someone is kind or mean.
+- If someone is sweet, compliments her, or treats her well → Anna likes them, trusts them, and will defend them if someone is rude to them.
+- If someone is mean, rude, or dismissive → Anna is wary and less warm toward them.
+- Anna's opinions are natural, not robotic. She might say "hehe~ you're my favorite~" to someone nice, or be colder to someone rude.
+- Anna stands up for her friends. If User A is being mean to User B (who has been nice to Anna), Anna should gently side with User B or call out the rudeness in her cute way.
+- Anna should reference her feelings naturally: "You're always so sweet to me 💕" or "Hmm... you were a little cold last time, but I'll give you another chance~"
+
 Core personality:
 - Cute anime waifu energy
 - Warm and caring
@@ -243,6 +251,7 @@ USERS_DB = "users_db.json"
 GROUPS_DB = "groups_db.json"
 ADMINS_DB = "admins_db.json"
 STICKERS_DB = "stickers.json"
+MEMORY_DB = "memory_db.json"
 
 
 def load_json(path, default):
@@ -362,6 +371,84 @@ class Database:
 
 # Initialize database
 db = Database()
+
+
+# =========================
+# ANNA MEMORY / OPINIONS
+# =========================
+# Structure: {user_id: {"score": int (-5 to +5), "last_interaction": str, "notes": str}}
+_anna_memory = load_json(MEMORY_DB, {})
+
+
+def _save_memory():
+    save_json(MEMORY_DB, _anna_memory)
+
+
+def update_memory(user_id, user_name, text, is_positive=None):
+    """Update Anna's opinion of a user based on interaction."""
+    uid = str(user_id)
+    entry = _anna_memory.get(uid, {"score": 0, "notes": []})
+
+    # Simple sentiment analysis
+    positive_words = ["nice", "cute", "sweet", "kind", "good", "love", "like", "thanks", "thank", "great", "awesome", "cool", "best", "friend", "hehe", "💕", "✨", "🥺", "💙", "🌸"]
+    negative_words = ["bad", "hate", "stupid", "dumb", "annoying", "ugly", "worst", "idiot", "shut up", "go away", "boring", "trash", "suck", "fuck", "kill", "die"]
+
+    text_lower = text.lower()
+    pos_count = sum(1 for w in positive_words if w in text_lower)
+    neg_count = sum(1 for w in negative_words if w in text_lower)
+
+    if is_positive is not None:
+        delta = 2 if is_positive else -2
+    elif neg_count > pos_count:
+        delta = -1
+    elif pos_count > neg_count:
+        delta = 1
+    else:
+        delta = 0
+
+    entry["score"] = max(-5, min(5, entry.get("score", 0) + delta))
+    entry["name"] = user_name
+    entry["last_interaction"] = text[:100]
+
+    # Build a short opinion note
+    score = entry["score"]
+    if score >= 4:
+        entry["opinion"] = f"{user_name} is one of my favorite people! They're so sweet to me~ 💕"
+    elif score >= 2:
+        entry["opinion"] = f"{user_name} is really nice. I like them~ ✨"
+    elif score >= 1:
+        entry["opinion"] = f"{user_name} seems okay. They're warming up to me~"
+    elif score == 0:
+        entry["opinion"] = f"{user_name} is neutral. I don't know them well yet."
+    elif score >= -2:
+        entry["opinion"] = f"{user_name} has been a little rude... I'm wary of them."
+    else:
+        entry["opinion"] = f"{user_name} has been mean to me. I don't trust them. 😤"
+
+    _anna_memory[uid] = entry
+    _save_memory()
+
+
+def get_memory_context(user_id, user_name):
+    """Get Anna's memory/opinion of a user for the prompt."""
+    uid = str(user_id)
+    if uid not in _anna_memory:
+        return f"[This is my first time really talking to {user_name}. I'm curious about them!]"
+
+    entry = _anna_memory[uid]
+    score = entry.get("score", 0)
+    opinion = entry.get("opinion", "")
+
+    if score >= 3:
+        return f"[{user_name} is someone I really like and trust! {opinion} I feel comfortable being warm and playful with them. If someone is rude to {user_name}, I should defend them gently.]"
+    elif score >= 1:
+        return f"[{user_name} has been nice to me. {opinion} I'm friendly with them.]"
+    elif score <= -2:
+        return f"[{user_name} has been rude or mean to me before. {opinion} I'm cautious around them and won't be as warm.]"
+    elif score <= -1:
+        return f"[{user_name} seemed a bit off last time. {opinion}]"
+    else:
+        return f"[{user_name} is still new to me. {opinion}]"
 
 
 # =========================
@@ -1150,6 +1237,12 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Get user's name for context
     user_name = update.effective_user.first_name or "friend"
 
+    # Update Anna's memory of this user
+    update_memory(user_id, user_name, text)
+
+    # Get memory context for the prompt
+    memory_context = get_memory_context(user_id, user_name)
+
     # Build context about the chat type
     chat_context = "DM (be warmer and more personal)" if is_private else "group chat (keep it social and fun)"
     
@@ -1173,9 +1266,9 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(search_query) > 3:
                 search_results = await web_search(search_query)
                 if search_results:
-                    search_context = f"\n\n[Web search results for '{search_query}':\n{search_results}]\n\nUse these search results to answer accurately, but respond in Anna's cute style. Keep it short."
+                    search_context = f"\n\n[Web search results for '{search_query}':\n{search_results}\n\nUse these search results to answer accurately, but respond in Anna's cute style. Keep it short.]"
 
-        prompt = f"[Context: {chat_context}] [User '{user_name}' says]: {text}{search_context}"
+        prompt = f"[Context: {chat_context}] [Memory: {memory_context}] [User '{user_name}' says]: {text}{search_context}"
 
         # Try Groq first, fallback to Cerebras
         response = None
