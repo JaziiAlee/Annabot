@@ -1350,7 +1350,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 response = await asyncio.to_thread(
                     lambda: openrouter_client.chat.completions.create(
-                        model="qwen/qwen-2.5-7b-instruct:free",
+                        model="meta-llama/llama-3.1-8b-instruct",
                         messages=messages,
                         max_tokens=300,
                         temperature=0.9
