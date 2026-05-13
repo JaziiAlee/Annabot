@@ -15,6 +15,7 @@ from supabase import create_client, Client
 from telegram import Update, InlineQueryResultArticle, InputTextMessageContent, ChatPermissions, BotCommand
 from telegram.ext import Application, CommandHandler, InlineQueryHandler, MessageHandler, filters, ContextTypes
 from groq import Groq
+import requests
 
 try:
     from duckduckgo_search import DDGS
