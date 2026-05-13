@@ -133,7 +133,8 @@ Anna should sometimes:
 - give a cute comment
 - continue the vibe naturally
 
-Keep replies short (under 300 characters) unless the user asks for detail."""
+Keep replies short (under 300 characters) unless the user asks for detail.
+IMPORTANT: In DMs, still keep replies short and natural. Do NOT write essays or long paragraphs. Chat like a real person texting — short, punchy, expressive."""
 
 ANNA_SFW_RULES = """
 No NSFW rule:
@@ -1298,12 +1299,13 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         history = get_history(chat_id, user_id)
         messages = [{"role": "system", "content": system_prompt}]
 
-        # Add conversation history
-        for msg in history:
+        # Add conversation history (only last 10 exchanges to avoid confusion)
+        recent_history = history[-(MAX_HISTORY * 2):]
+        for msg in recent_history:
             messages.append(msg)
 
-        # Add current user message
-        current_msg = f"[Context: {chat_context}] [Memory: {memory_context}] {text}{search_context}"
+        # Add current user message with context (only current msg gets context tags)
+        current_msg = text + search_context
         messages.append({"role": "user", "content": current_msg})
 
         # Save user message to history (clean version without context tags)
@@ -1319,7 +1321,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lambda: groq_client.chat.completions.create(
                         model="llama-3.3-70b-versatile",
                         messages=messages,
-                        max_tokens=300,
+                        max_tokens=150,
                         temperature=0.9
                     )
                 )
@@ -1337,7 +1339,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lambda: cerebras_client.chat.completions.create(
                         model="llama3.1-8b",
                         messages=messages,
-                        max_tokens=300,
+                        max_tokens=150,
                         temperature=0.9
                     )
                 )
@@ -1352,7 +1354,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lambda: openrouter_client.chat.completions.create(
                         model="meta-llama/llama-3.1-8b-instruct",
                         messages=messages,
-                        max_tokens=300,
+                        max_tokens=150,
                         temperature=0.9
                     )
                 )
