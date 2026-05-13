@@ -1180,6 +1180,29 @@ async def web_search(query, num_results=3):
 _rate_limit_until_ref = [0]  # timestamp when rate limit resets
 _rate_limit_notified_ref = [False]  # whether we already told the user
 
+# Session conversation memory: {(chat_id, user_id): [{"role": "user"/"assistant", "content": "..."}]}
+_conversation_history = {}
+MAX_HISTORY = 15  # Keep last 15 messages per user per chat
+
+
+def get_conversation_key(chat_id, user_id):
+    return f"{chat_id}_{user_id}"
+
+
+def get_history(chat_id, user_id):
+    key = get_conversation_key(chat_id, user_id)
+    return _conversation_history.get(key, [])
+
+
+def add_to_history(chat_id, user_id, role, content):
+    key = get_conversation_key(chat_id, user_id)
+    if key not in _conversation_history:
+        _conversation_history[key] = []
+    _conversation_history[key].append({"role": role, "content": content})
+    # Trim to max history
+    if len(_conversation_history[key]) > MAX_HISTORY * 2:
+        _conversation_history[key] = _conversation_history[key][-(MAX_HISTORY * 2):]
+
 
 async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle messages where Anna should respond with personality."""
@@ -1271,6 +1294,21 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         prompt = f"[Context: {chat_context}] [Memory: {memory_context}] [User '{user_name}' says]: {text}{search_context}"
 
+        # Build message history for multi-turn conversation
+        history = get_history(chat_id, user_id)
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # Add conversation history
+        for msg in history:
+            messages.append(msg)
+
+        # Add current user message
+        current_msg = f"[Context: {chat_context}] [Memory: {memory_context}] {text}{search_context}"
+        messages.append({"role": "user", "content": current_msg})
+
+        # Save user message to history (clean version without context tags)
+        add_to_history(chat_id, user_id, "user", text)
+
         # Try Groq first, fallback to Cerebras
         response = None
         used_provider = None
@@ -1280,10 +1318,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response = await asyncio.to_thread(
                     lambda: groq_client.chat.completions.create(
                         model="llama-3.3-70b-versatile",
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": prompt}
-                        ],
+                        messages=messages,
                         max_tokens=300,
                         temperature=0.9
                     )
@@ -1301,10 +1336,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response = await asyncio.to_thread(
                     lambda: cerebras_client.chat.completions.create(
                         model="llama-3.1-70b",
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": prompt}
-                        ],
+                        messages=messages,
                         max_tokens=300,
                         temperature=0.9
                     )
@@ -1319,10 +1351,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response = await asyncio.to_thread(
                     lambda: openrouter_client.chat.completions.create(
                         model="meta-llama/llama-3.1-8b-instruct:free",
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": prompt}
-                        ],
+                        messages=messages,
                         max_tokens=300,
                         temperature=0.9
                     )
@@ -1334,6 +1363,8 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if response and response.choices:
             reply = response.choices[0].message.content.strip()[:500]
             if reply:
+                # Save Anna's reply to conversation history
+                add_to_history(chat_id, user_id, "assistant", reply)
                 await update.message.reply_text(reply)
         elif not response:
             # All providers failed
