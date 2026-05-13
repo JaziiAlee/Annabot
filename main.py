@@ -1335,7 +1335,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 response = await asyncio.to_thread(
                     lambda: cerebras_client.chat.completions.create(
-                        model="llama-3.1-70b",
+                        model="llama3.1-8b",
                         messages=messages,
                         max_tokens=300,
                         temperature=0.9
@@ -1350,7 +1350,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 response = await asyncio.to_thread(
                     lambda: openrouter_client.chat.completions.create(
-                        model="meta-llama/llama-3.1-8b-instruct:free",
+                        model="qwen/qwen-2.5-7b-instruct:free",
                         messages=messages,
                         max_tokens=300,
                         temperature=0.9
