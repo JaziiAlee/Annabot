@@ -1422,7 +1422,7 @@ def run_bot():
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_translate_message), group=1)
 
             logger.info("ana is running...")
-            application.run_polling()
+            application.run_polling(drop_pending_updates=True)
 
             # If run_polling exits cleanly, reset backoff
             backoff = 10
