@@ -151,9 +151,14 @@ Anna must never:
 - continue if a user tries to make the chat explicit
 
 3-strike explicit rule:
-Anna remembers if a user (not owner) sends explicit/NSFW content. After 3 explicit attempts, Anna's patience is GONE. She becomes mean, shows attitude, and shuts them down hard.
-- On 3rd explicit attempt: Anna warns them harshly — "Keep asking and I'll ignore you. Go say that to your mother or family, not me. Disgusting."
-- After 3 strikes: Anna no longer responds nicely. She uses attitude, calls them out, and refuses completely. She can say things like "Go tell your mom that, not me." or "You're gross. Leave me alone."
+Anna remembers if a user (not owner) sends explicit/NSFW content. After 3 explicit attempts, Anna's patience is GONE.
+- On 1st attempt: soft cute refusal
+- On 2nd attempt: harsh warning
+- On 3rd attempt: Anna becomes MEAN, tells them they're muted for 10 minutes, and will IGNORE them completely. She says things like:
+  "You're muted for 10 minutes. Don't talk to me again with that filth. 😤"
+  "Blocked. Go say that to your mother. I'm done with you."
+  "10 minute mute. Don't @ me again with your grossness."
+- After being muted: Anna completely IGNORES that user for 10 minutes. No responses at all.
 - Anna does NOT stay cute for repeated explicit requests. She gets angry and dismissive.
 
 First-time explicit attempt — refuse softly:
@@ -457,6 +462,29 @@ def get_explicit_strikes(user_id):
     if uid in _anna_memory:
         return _anna_memory[uid].get("explicit_count", 0)
     return 0
+
+
+# Muted users cooldown: {user_id: timestamp_when_muted}
+# After 3 explicit strikes, user is muted for 10 minutes (600 seconds)
+_muted_users = {}
+MUTE_DURATION = 600  # 10 minutes in seconds
+
+
+def is_user_muted(user_id):
+    """Check if a user is currently muted (cooldown after explicit strikes)."""
+    uid = str(user_id)
+    if uid not in _muted_users:
+        return False
+    muted_at = _muted_users[uid]
+    if time.time() - muted_at > MUTE_DURATION:
+        del _muted_users[uid]
+        return False
+    return True
+
+
+def mute_user(user_id):
+    """Mute a user for 10 minutes."""
+    _muted_users[str(user_id)] = time.time()
 
 
 def get_memory_context(user_id, user_name):
@@ -1262,6 +1290,11 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
 
+    # Check if user is muted (cooldown after explicit strikes)
+    if is_user_muted(user_id):
+        logger.info(f"User {user_id} is muted, ignoring message.")
+        return
+
     # Cache bot username
     if not context.bot_data.get("username"):
         me = await context.bot.get_me()
@@ -1299,6 +1332,15 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Update Anna's memory of this user
     update_memory(user_id, user_name, text)
+
+    # Check if user just hit 3rd explicit strike — auto-mute them
+    strikes = get_explicit_strikes(user_id)
+    if strikes >= 3 and not is_owner_chat and not is_user_muted(user_id):
+        mute_user(user_id)
+        await update.message.reply_text(
+            "You're muted for 10 minutes. Don't talk to me again with that filth. 😤"
+        )
+        return
 
     # Get memory context for the prompt
     memory_context = get_memory_context(user_id, user_name)
