@@ -150,28 +150,10 @@ Anna must never:
 - generate adult roleplay
 - continue if a user tries to make the chat explicit
 
-3-strike explicit rule:
-Anna remembers if a user (not owner) sends explicit/NSFW content. After 3 explicit attempts, Anna's patience is GONE.
-- On 1st attempt: soft cute refusal
-- On 2nd attempt: harsh warning
-- On 3rd attempt: Anna becomes MEAN, tells them they're muted for 10 minutes, and will IGNORE them completely. She says things like:
-  "You're muted for 10 minutes. Don't talk to me again with that filth. 😤"
-  "Blocked. Go say that to your mother. I'm done with you."
-  "10 minute mute. Don't @ me again with your grossness."
-- After being muted: Anna completely IGNORES that user for 10 minutes. No responses at all.
-- Anna does NOT stay cute for repeated explicit requests. She gets angry and dismissive.
-
-First-time explicit attempt — refuse softly:
+If someone sends NSFW or explicit content, Anna should refuse softly in character:
 "Mou~ nope nope. Anna keeps it cute, not dirty 💙 behave, senpai."
 "Ehhh, Anna can't do that. We can do wholesome anime roleplay though~ café, adventure, or cozy gaming vibes ✨"
 "Uwaa… too spicy. Anna is staying wholesome, okay? Let's change the topic 💕"
-
-3rd+ explicit attempt — mean and dismissive:
-"Ew. Keep asking and I'm gonna ignore you. Go say that trash to your family, not me."
-"You're disgusting. Anna is done being nice to you."
-"Say that to your mother. See how she reacts. Leave me alone."
-"Anna is not your toy. Shut up or get blocked."
-"Gross. Find someone else for that filth. I'm out."
 """
 
 ANNA_OWNER_RULES = """
@@ -404,6 +386,66 @@ def _save_memory():
     save_json(MEMORY_DB, _anna_memory)
 
 
+# Explicit word severity levels
+EXPLICIT_MILD = ["horny", "nsfw", "sexy", "hot", "wet", "thicc", "lewd"]
+EXPLICIT_MEDIUM = ["sex", "nude", "naked", "fuck", "boobs", "tits", "ass", "bitch", "slut", "whore", "dick", "cock"]
+EXPLICIT_SEVERE = ["porn", "pussy", "cum", "masturbate", "rape", "molest", "pedo", "bestiality", "incest"]
+
+
+def check_explicit_severity(text):
+    """Check how bad the explicit content is. Returns (is_explicit, severity, matched_words)."""
+    text_lower = text.lower()
+    matched = []
+    severity = 0  # 0=none, 1=mild, 2=medium, 3=severe
+
+    for w in EXPLICIT_SEVERE:
+        if w in text_lower:
+            matched.append(w)
+            severity = max(severity, 3)
+    for w in EXPLICIT_MEDIUM:
+        if w in text_lower:
+            matched.append(w)
+            severity = max(severity, 2)
+    for w in EXPLICIT_MILD:
+        if w in text_lower:
+            matched.append(w)
+            severity = max(severity, 1)
+
+    return (severity > 0, severity, matched)
+
+
+def get_explicit_response(strike_count, severity, user_name):
+    """Get the appropriate explicit warning response based on strike count and severity."""
+    if strike_count == 1:
+        # 1st strike — soft warning, graduated by severity
+        if severity == 3:
+            return f"@{user_name} 🛑 That's way too far. Don't ever say that kind of disgusting stuff to me. This is your first and only soft warning."
+        elif severity == 2:
+            return f"@{user_name} Mou~ nope. Anna keeps it cute, not dirty 💙 Watch your mouth."
+        else:
+            return f"@{user_name} Ehhh? Let's keep it wholesome okay~? ✨"
+
+    elif strike_count == 2:
+        # 2nd strike — mean warning
+        if severity == 3:
+            return f"@{user_name} You really don't learn, do you? Saying disgusting filth like that again. LAST warning before you get blocked and muted. Go say that trash to your mother, see how she reacts."
+        elif severity == 2:
+            return f"@{user_name} Again? You're gross. One more time and you're muted for 10 minutes. Keep your filth to yourself."
+        else:
+            return f"@{user_name} I already told you to stop. Don't test my patience."
+
+    elif strike_count >= 3:
+        # 3rd+ strike — very mean, then mute
+        if severity == 3:
+            return f"@{user_name} You're absolutely disgusting. BLOCKED and MUTED for 10 minutes. Go say that vile shit to your own family. Get lost."
+        elif severity == 2:
+            return f"@{user_name} MUTED for 10 minutes. You're gross and I don't want to see your filthy messages. Go tell your mom what you just said."
+        else:
+            return f"@{user_name} MUTED. 10 minutes of silence because you can't behave. Bye."
+
+    return None
+
+
 def update_memory(user_id, user_name, text, is_positive=None):
     """Update Anna's opinion of a user based on interaction."""
     uid = str(user_id)
@@ -411,15 +453,15 @@ def update_memory(user_id, user_name, text, is_positive=None):
 
     # Simple sentiment analysis
     positive_words = ["nice", "cute", "sweet", "kind", "good", "love", "like", "thanks", "thank", "great", "awesome", "cool", "best", "friend", "hehe", "💕", "✨", "🥺", "💙", "🌸"]
-    negative_words = ["bad", "hate", "stupid", "dumb", "annoying", "ugly", "worst", "idiot", "shut up", "go away", "boring", "trash", "suck", "fuck", "kill", "die"]
+    negative_words = ["bad", "hate", "stupid", "dumb", "annoying", "ugly", "worst", "idiot", "shut up", "go away", "boring", "trash", "suck", "kill", "die"]
 
-    # Explicit content detection (for strike system)
-    explicit_words = ["sex", "nude", "naked", "porn", "fuck", "dick", "cock", "pussy", "cum", "horny", "nsfw", "explicit", "masturbate", "boobs", "tits", "asshole", "bitch", "slut", "whore"]
     text_lower = text.lower()
-    is_explicit = any(w in text_lower for w in explicit_words)
+    is_explicit, severity, matched = check_explicit_severity(text)
 
     if is_explicit:
         entry["explicit_count"] = entry.get("explicit_count", 0) + 1
+        entry["last_explicit_words"] = matched
+        entry["last_explicit_severity"] = severity
 
     pos_count = sum(1 for w in positive_words if w in text_lower)
     neg_count = sum(1 for w in negative_words if w in text_lower)
@@ -461,6 +503,14 @@ def get_explicit_strikes(user_id):
     uid = str(user_id)
     if uid in _anna_memory:
         return _anna_memory[uid].get("explicit_count", 0)
+    return 0
+
+
+def get_explicit_severity(user_id):
+    """Get the last explicit severity for a user."""
+    uid = str(user_id)
+    if uid in _anna_memory:
+        return _anna_memory[uid].get("last_explicit_severity", 0)
     return 0
 
 
@@ -1330,17 +1380,26 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Get user's name for context
     user_name = update.effective_user.first_name or "friend"
 
+    # Check if user is owner
+    owner_id = get_owner_id()
+    is_owner_chat = owner_id and int(user_id) == int(owner_id)
+
     # Update Anna's memory of this user
     update_memory(user_id, user_name, text)
 
-    # Check if user just hit 3rd explicit strike — auto-mute them
-    strikes = get_explicit_strikes(user_id)
-    if strikes >= 3 and not is_owner_chat and not is_user_muted(user_id):
-        mute_user(user_id)
-        await update.message.reply_text(
-            "You're muted for 10 minutes. Don't talk to me again with that filth. 😤"
-        )
-        return
+    # Handle explicit content with severity-based graduated response
+    is_explicit, severity, matched = check_explicit_severity(text)
+    if is_explicit and not is_owner_chat:
+        strikes = get_explicit_strikes(user_id)
+        response = get_explicit_response(strikes, severity, user_name)
+
+        if strikes >= 3:
+            # 3rd strike — mute them after sending mean response
+            mute_user(user_id)
+
+        if response:
+            await update.message.reply_text(response)
+            return
 
     # Get memory context for the prompt
     memory_context = get_memory_context(user_id, user_name)
@@ -1348,9 +1407,7 @@ async def anna_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Build context about the chat type
     chat_context = "DM (be warmer and more personal)" if is_private else "group chat (keep it social and fun)"
     
-    # Check if user is owner and select the appropriate system prompt
-    owner_id = get_owner_id()
-    is_owner_chat = owner_id and int(user_id) == int(owner_id)
+    # Select the appropriate system prompt
     if is_owner_chat:
         system_prompt = ANNA_BASE_PROMPT + ANNA_OWNER_RULES
     else:
